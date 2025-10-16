@@ -1,0 +1,45 @@
+{
+  "files.exclude": {
+    // General
+    "**/.git": true,
+    "**/.svn": true,
+    "**/.hg": true,
+    "**/CVS": true,
+    "**/.DS_Store": true,
+    "**/Thumbs.db": true,
+
+    // Hermit
+    ".hermit": true,
+
+    // Hide CLAUDE.md symlinks
+    "**/CLAUDE.md": true
+  },
+
+  // Editor
+  "editor.formatOnSave": true,
+  "files.insertFinalNewline": true,
+  "search.exclude": {
+  },
+  "editor.stickyScroll.enabled": true,
+
+  // Formatting
+  "prettier.requireConfig": true,
+  "editor.codeActionsOnSave": {
+    "source.organizeImports": "never"
+  },
+  "[yaml]": {
+    "editor.defaultFormatter": "esbenp.prettier-vscode",
+    "editor.autoIndent": "advanced"
+  },
+  "[json]": {
+    "editor.defaultFormatter": "esbenp.prettier-vscode"
+  },
+
+  // Hermit
+  "terminal.integrated.env.osx": {
+    "ACTIVE_HERMIT": null,
+    "HERMIT_ENV": null,
+    "HERMIT_ENV_OPS": null,
+    "HERMIT_BIN": null
+  }
+}
