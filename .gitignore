@@ -1,1 +1,47 @@
 .notes/
+
+# Go binaries
+hyperv-runner-pool
+hyperv-runner-pool.exe
+runner-orchestrator
+runner-orchestrator.exe
+*.exe
+*.dll
+*.so
+*.dylib
+
+# Environment files
+.env
+.env.local
+
+# Test coverage
+*.out
+coverage.html
+
+# IDE
+.vscode/
+.idea/
+
+# Build artifacts
+dist/
+build/
+
+# GoReleaser
+.goreleaser.yml.snap
+
+# Packer output
+output-*/
+output-windows-runner/
+output-windows-runner-enhanced/
+packer_cache/
+
+# VM images and templates
+*.vhdx
+*.vmdk
+*.vdi
+
+# Local VM storage (contains templates and running VM disks)
+vms/
+
+# Windows specific
+Thumbs.db
