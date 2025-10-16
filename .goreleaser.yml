@@ -1,0 +1,117 @@
+version: 2
+
+before:
+  hooks:
+    # Ensure dependencies are up to date
+    - go mod tidy
+    - go mod download
+
+builds:
+  - id: windows-amd64
+    main: ./main.go
+    binary: hyperv-runner-pool
+    goos:
+      - windows
+    goarch:
+      - amd64
+    env:
+      - CGO_ENABLED=0
+    flags:
+      - -trimpath
+    ldflags:
+      - -s -w
+      - -X main.version={{.Version}}
+      - -X main.commit={{.Commit}}
+      - -X main.date={{.Date}}
+
+archives:
+  - id: default
+    name_template: >-
+      {{ .ProjectName }}_
+      {{- .Version }}_
+      {{- .Os }}_
+      {{- .Arch }}
+    files:
+      # Include configuration and script files
+      - .env.example
+      - start.ps1
+      - README.md
+      # Include all Packer files
+      - packer/**/*
+
+checksum:
+  name_template: 'checksums.txt'
+  algorithm: sha256
+
+changelog:
+  sort: asc
+  filters:
+    exclude:
+      - '^docs:'
+      - '^test:'
+      - '^chore:'
+      - '^ci:'
+      - Merge pull request
+      - Merge branch
+  groups:
+    - title: Features
+      regexp: '^.*?feat(\([[:word:]]+\))??!?:.+$'
+      order: 0
+    - title: Bug Fixes
+      regexp: '^.*?fix(\([[:word:]]+\))??!?:.+$'
+      order: 1
+    - title: Improvements
+      regexp: '^.*?(refactor|perf)(\([[:word:]]+\))??!?:.+$'
+      order: 2
+    - title: Others
+      order: 999
+
+release:
+  draft: false
+  prerelease: auto
+  mode: replace
+  name_template: "Release {{.Version}}"
+  header: |
+    ## Hyper-V Runner Pool {{.Version}}
+
+    ### What's New
+  footer: |
+    ---
+
+    ### Installation
+
+    1. Download the `hyperv-runner-pool_{{.Version}}_windows_amd64.zip` file
+    2. Extract to your Windows machine
+    3. Follow the README.md for setup instructions
+
+    ### Verify Checksums
+
+    ```powershell
+    # Verify the download
+    Get-FileHash hyperv-runner-pool_{{.Version}}_windows_amd64.zip -Algorithm SHA256
+    # Compare with checksums.txt
+    ```
+
+    ### Quick Start
+
+    ```powershell
+    # Extract the archive
+    Expand-Archive hyperv-runner-pool_{{.Version}}_windows_amd64.zip
+
+    # Navigate to directory
+    cd hyperv-runner-pool_{{.Version}}_windows_amd64
+
+    # Configure environment
+    Copy-Item .env.example .env
+    notepad .env  # Fill in your values
+
+    # Run
+    .\start.ps1
+    ```
+
+    **Full Documentation**: See README.md in the release archive
+
+  disable: false
+
+snapshot:
+  version_template: "{{ incpatch .Version }}-next"
