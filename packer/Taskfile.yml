@@ -1,0 +1,34 @@
+version: '3'
+
+silent: true
+
+tasks:
+  init:
+    desc: Initialize Packer plugins
+    dir: '{{.TASKFILE_DIR}}'
+    cmds:
+      - packer init .
+
+  build:basic:
+    desc: Build basic Windows runner image
+    dir: '{{.TASKFILE_DIR}}'
+    cmds:
+      - packer build -var-file="windows-runner.pkrvars.hcl" -only="hyperv-iso.windows-runner" .
+
+  build:enhanced:
+    desc: Build enhanced Windows runner image with all tools
+    dir: '{{.TASKFILE_DIR}}'
+    cmds:
+      - packer build -var-file="windows-runner-enhanced.pkrvars.hcl" -only="hyperv-iso.windows-runner-enhanced" .
+
+  validate:basic:
+    desc: Validate basic Windows runner configuration
+    dir: '{{.TASKFILE_DIR}}'
+    cmds:
+      - packer validate -var-file="windows-runner.pkrvars.hcl" .
+
+  validate:enhanced:
+    desc: Validate enhanced Windows runner configuration
+    dir: '{{.TASKFILE_DIR}}'
+    cmds:
+      - packer validate -var-file="windows-runner-enhanced.pkrvars.hcl" .
