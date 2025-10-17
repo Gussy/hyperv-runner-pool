@@ -59,20 +59,34 @@ function Get-CommandVersion {
         [string]$VersionArg = "--version"
     )
     try {
-        $output = & $Command $VersionArg 2>&1 | Select-Object -First 1
-        return $output
-    } catch {
+        $output = & $Command $VersionArg 2>&1
+
+        # For goreleaser, find the line with "version" or "GitVersion" in it
+        if ($Command -eq "goreleaser") {
+            $versionLine = $output | Where-Object { $_ -match 'version|GitVersion' } | Select-Object -First 1
+            if ($versionLine) {
+                # Extract version number (e.g., "version: 1.2.3" or "GitVersion: 1.2.3")
+                if ($versionLine -match '[\d]+\.[\d]+\.[\d]+') {
+                    return $matches[0]
+                }
+                return $versionLine.Trim()
+            }
+        }
+
+        # For other commands, just return the first line
+        return ($output | Select-Object -First 1)
+    }
+    catch {
         return "Unknown"
     }
 }
 
 # Step 1: Install Chocolatey
-Write-Step "Step 1: Checking Chocolatey package manager..."
-
 if (Test-Command "choco") {
     $chocoVersion = Get-CommandVersion "choco" "-v"
     Write-Success "Chocolatey is already installed (version $chocoVersion)"
-} else {
+}
+else {
     Write-Info "Installing Chocolatey..."
     try {
         Set-ExecutionPolicy Bypass -Scope Process -Force
@@ -80,180 +94,186 @@ if (Test-Command "choco") {
         Invoke-Expression ((New-Object System.Net.WebClient).DownloadString('https://community.chocolatey.org/install.ps1'))
 
         # Refresh environment variables
-        $env:Path = [System.Environment]::GetEnvironmentVariable("Path","Machine") + ";" + [System.Environment]::GetEnvironmentVariable("Path","User")
+        $env:Path = [System.Environment]::GetEnvironmentVariable("Path", "Machine") + ";" + [System.Environment]::GetEnvironmentVariable("Path", "User")
 
         Write-Success "Chocolatey installed successfully"
-    } catch {
+    }
+    catch {
         Write-Error-Custom "Failed to install Chocolatey: $_"
         exit 1
     }
 }
 
 # Step 2: Install Go
-Write-Step "Step 2: Checking Go installation..."
-
 if (Test-Command "go") {
     $goVersion = Get-CommandVersion "go" "version"
     Write-Success "Go is already installed ($goVersion)"
-} else {
+}
+else {
     Write-Info "Installing Go 1.25.3..."
     try {
         choco install golang --version=1.25.3 -y
 
         # Refresh environment variables
-        $env:Path = [System.Environment]::GetEnvironmentVariable("Path","Machine") + ";" + [System.Environment]::GetEnvironmentVariable("Path","User")
+        $env:Path = [System.Environment]::GetEnvironmentVariable("Path", "Machine") + ";" + [System.Environment]::GetEnvironmentVariable("Path", "User")
 
         if (Test-Command "go") {
             $goVersion = Get-CommandVersion "go" "version"
             Write-Success "Go installed successfully ($goVersion)"
-        } else {
+        }
+        else {
             Write-Error-Custom "Go installation completed but 'go' command not found. You may need to restart your terminal."
         }
-    } catch {
+    }
+    catch {
         Write-Error-Custom "Failed to install Go: $_"
         Write-Info "Continuing with other installations..."
     }
 }
 
 # Step 3: Install Git
-Write-Step "Step 3: Checking Git installation..."
-
 if (Test-Command "git") {
     $gitVersion = Get-CommandVersion "git" "--version"
     Write-Success "Git is already installed ($gitVersion)"
-} else {
+}
+else {
     Write-Info "Installing Git..."
     try {
         choco install git -y
 
         # Refresh environment variables
-        $env:Path = [System.Environment]::GetEnvironmentVariable("Path","Machine") + ";" + [System.Environment]::GetEnvironmentVariable("Path","User")
+        $env:Path = [System.Environment]::GetEnvironmentVariable("Path", "Machine") + ";" + [System.Environment]::GetEnvironmentVariable("Path", "User")
 
         if (Test-Command "git") {
             $gitVersion = Get-CommandVersion "git" "--version"
             Write-Success "Git installed successfully ($gitVersion)"
-        } else {
+        }
+        else {
             Write-Error-Custom "Git installation completed but 'git' command not found. You may need to restart your terminal."
         }
-    } catch {
+    }
+    catch {
         Write-Error-Custom "Failed to install Git: $_"
         Write-Info "Continuing with other installations..."
     }
 }
 
 # Step 4: Install Task
-Write-Step "Step 4: Checking Task installation..."
-
 if (Test-Command "task") {
     $taskVersion = Get-CommandVersion "task" "--version"
     Write-Success "Task is already installed ($taskVersion)"
-} else {
+}
+else {
     Write-Info "Installing Task..."
     try {
         choco install go-task -y
 
         # Refresh environment variables
-        $env:Path = [System.Environment]::GetEnvironmentVariable("Path","Machine") + ";" + [System.Environment]::GetEnvironmentVariable("Path","User")
+        $env:Path = [System.Environment]::GetEnvironmentVariable("Path", "Machine") + ";" + [System.Environment]::GetEnvironmentVariable("Path", "User")
 
         if (Test-Command "task") {
             $taskVersion = Get-CommandVersion "task" "--version"
             Write-Success "Task installed successfully ($taskVersion)"
-        } else {
+        }
+        else {
             Write-Error-Custom "Task installation completed but 'task' command not found. You may need to restart your terminal."
         }
-    } catch {
+    }
+    catch {
         Write-Error-Custom "Failed to install Task: $_"
         Write-Info "Continuing with other installations..."
     }
 }
 
 # Step 5: Install Packer
-Write-Step "Step 5: Checking Packer installation..."
-
 if (Test-Command "packer") {
     $packerVersion = Get-CommandVersion "packer" "version"
     Write-Success "Packer is already installed ($packerVersion)"
-} else {
+}
+else {
     Write-Info "Installing Packer..."
     try {
         choco install packer -y
 
         # Refresh environment variables
-        $env:Path = [System.Environment]::GetEnvironmentVariable("Path","Machine") + ";" + [System.Environment]::GetEnvironmentVariable("Path","User")
+        $env:Path = [System.Environment]::GetEnvironmentVariable("Path", "Machine") + ";" + [System.Environment]::GetEnvironmentVariable("Path", "User")
 
         if (Test-Command "packer") {
             $packerVersion = Get-CommandVersion "packer" "version"
             Write-Success "Packer installed successfully ($packerVersion)"
-        } else {
+        }
+        else {
             Write-Error-Custom "Packer installation completed but 'packer' command not found. You may need to restart your terminal."
         }
-    } catch {
+    }
+    catch {
         Write-Error-Custom "Failed to install Packer: $_"
         Write-Info "Continuing with other installations..."
     }
 }
 
 # Step 6: Install GoReleaser
-Write-Step "Step 6: Checking GoReleaser installation..."
-
 if (Test-Command "goreleaser") {
     $goreleaserVersion = Get-CommandVersion "goreleaser" "--version"
     Write-Success "GoReleaser is already installed ($goreleaserVersion)"
-} else {
+}
+else {
     Write-Info "Installing GoReleaser..."
     try {
         choco install goreleaser -y
 
         # Refresh environment variables
-        $env:Path = [System.Environment]::GetEnvironmentVariable("Path","Machine") + ";" + [System.Environment]::GetEnvironmentVariable("Path","User")
+        $env:Path = [System.Environment]::GetEnvironmentVariable("Path", "Machine") + ";" + [System.Environment]::GetEnvironmentVariable("Path", "User")
 
         if (Test-Command "goreleaser") {
             $goreleaserVersion = Get-CommandVersion "goreleaser" "--version"
             Write-Success "GoReleaser installed successfully ($goreleaserVersion)"
-        } else {
+        }
+        else {
             Write-Error-Custom "GoReleaser installation completed but 'goreleaser' command not found. You may need to restart your terminal."
         }
-    } catch {
+    }
+    catch {
         Write-Error-Custom "Failed to install GoReleaser: $_"
         Write-Info "Continuing with other installations..."
     }
 }
 
 # Step 7: Install Hurl
-Write-Step "Step 7: Checking Hurl installation..."
-
 if (Test-Command "hurl") {
     $hurlVersion = Get-CommandVersion "hurl" "--version"
     Write-Success "Hurl is already installed ($hurlVersion)"
-} else {
+}
+else {
     Write-Info "Installing Hurl..."
     try {
         choco install hurl -y
 
         # Refresh environment variables
-        $env:Path = [System.Environment]::GetEnvironmentVariable("Path","Machine") + ";" + [System.Environment]::GetEnvironmentVariable("Path","User")
+        $env:Path = [System.Environment]::GetEnvironmentVariable("Path", "Machine") + ";" + [System.Environment]::GetEnvironmentVariable("Path", "User")
 
         if (Test-Command "hurl") {
             $hurlVersion = Get-CommandVersion "hurl" "--version"
             Write-Success "Hurl installed successfully ($hurlVersion)"
-        } else {
+        }
+        else {
             Write-Error-Custom "Hurl installation completed but 'hurl' command not found. You may need to restart your terminal."
         }
-    } catch {
+    }
+    catch {
         Write-Error-Custom "Failed to install Hurl: $_"
         Write-Info "Continuing with other installations..."
     }
 }
 
 # Step 8: Check Hyper-V
-Write-Step "Step 8: Checking Hyper-V..."
-
 try {
     $hypervFeature = Get-WindowsOptionalFeature -FeatureName Microsoft-Hyper-V-All -Online
 
     if ($hypervFeature.State -eq "Enabled") {
         Write-Success "Hyper-V is already enabled"
-    } else {
+    }
+    else {
         Write-Info "Enabling Hyper-V..."
         Write-Host "  NOTE: A system reboot will be required after enabling Hyper-V" -ForegroundColor Yellow
 
@@ -268,19 +288,19 @@ try {
                 Start-Sleep -Seconds 10
                 Restart-Computer -Force
             }
-        } else {
+        }
+        else {
             Write-Info "Skipping Hyper-V enablement. You can enable it later with:"
             Write-Host "    Enable-WindowsOptionalFeature -Online -FeatureName Microsoft-Hyper-V -All" -ForegroundColor Gray
         }
     }
-} catch {
+}
+catch {
     Write-Error-Custom "Could not check Hyper-V status: $_"
     Write-Info "You may need to enable Hyper-V manually for production use"
 }
 
 # Step 9: Create directory structure
-Write-Step "Step 9: Creating directory structure..."
-
 $directories = @(
     "vms\templates",
     "vms\storage"
@@ -289,11 +309,13 @@ $directories = @(
 foreach ($dir in $directories) {
     if (Test-Path $dir) {
         Write-Success "Directory already exists: $dir"
-    } else {
+    }
+    else {
         try {
             New-Item -Path $dir -ItemType Directory -Force | Out-Null
             Write-Success "Created directory: $dir"
-        } catch {
+        }
+        catch {
             Write-Error-Custom "Failed to create directory $dir : $_"
         }
     }
@@ -309,23 +331,21 @@ Write-Host "  VM_TEMPLATE_PATH=C:\your\custom\path\runner-template.vhdx" -Foregr
 Write-Host "  VM_STORAGE_PATH=C:\your\custom\storage\path" -ForegroundColor Gray
 
 # Step 10: Setup environment file
-Write-Step "Step 10: Setting up environment configuration..."
-
 if (Test-Path ".env") {
     Write-Success ".env file already exists"
-} else {
+}
+else {
     if (Test-Path ".env.example") {
         Copy-Item ".env.example" ".env"
         Write-Success "Created .env from .env.example"
         Write-Info "IMPORTANT: Edit .env file and fill in your actual values!"
-    } else {
+    }
+    else {
         Write-Info ".env.example not found, skipping .env creation"
     }
 }
 
 # Step 11: Initialize Go modules
-Write-Step "Step 11: Downloading Go dependencies..."
-
 if (Test-Path "go.mod") {
     if (Test-Command "go") {
         try {
@@ -334,40 +354,45 @@ if (Test-Path "go.mod") {
             Write-Info "Running go mod tidy..."
             go mod tidy
             Write-Success "Go dependencies downloaded successfully"
-        } catch {
+        }
+        catch {
             Write-Error-Custom "Failed to download Go dependencies: $_"
             Write-Info "You can run 'go mod download' manually later"
         }
-    } else {
+    }
+    else {
         Write-Info "Go command not available, skipping dependency download"
     }
-} else {
+}
+else {
     Write-Info "go.mod not found in current directory, skipping"
 }
 
 # Optional: Ask about Tailscale (for production webhook ingress)
-Write-Step "Optional: Tailscale installation"
-Write-Host "  Tailscale is needed for production webhook ingress (GitHub → your machine)" -ForegroundColor Gray
-Write-Host "  For development, this is optional." -ForegroundColor Gray
-$installTailscale = Read-Host "  Do you want to install Tailscale? (y/n)"
+if (Test-Command "tailscale") {
+    Write-Success "Tailscale is already installed"
+}
+else {
+    Write-Host "  Tailscale is needed for production webhook ingress" -ForegroundColor Gray
+    Write-Host "  For development, this is optional." -ForegroundColor Gray
+    $installTailscale = Read-Host "  Do you want to install Tailscale? (y/n)"
 
-if ($installTailscale -eq 'y' -or $installTailscale -eq 'Y') {
-    if (Test-Command "tailscale") {
-        Write-Success "Tailscale is already installed"
-    } else {
+    if ($installTailscale -eq 'y' -or $installTailscale -eq 'Y') {
         Write-Info "Installing Tailscale..."
         try {
             choco install tailscale -y
             Write-Success "Tailscale installed successfully"
             Write-Info "After reboot, run: tailscale login"
             Write-Info "Then for webhook ingress: tailscale funnel 8080"
-        } catch {
+        }
+        catch {
             Write-Error-Custom "Failed to install Tailscale: $_"
             Write-Info "You can install it manually from https://tailscale.com/download/windows"
         }
     }
-} else {
-    Write-Info "Skipping Tailscale installation"
+    else {
+        Write-Info "Skipping Tailscale installation"
+    }
 }
 
 # Summary
@@ -379,21 +404,23 @@ Write-Host ""
 
 Write-Host "Installed tools:" -ForegroundColor Green
 $tools = @(
-    @{Name="Chocolatey"; Command="choco"; Arg="-v"},
-    @{Name="Go"; Command="go"; Arg="version"},
-    @{Name="Git"; Command="git"; Arg="--version"},
-    @{Name="Task"; Command="task"; Arg="--version"},
-    @{Name="Packer"; Command="packer"; Arg="version"},
-    @{Name="GoReleaser"; Command="goreleaser"; Arg="--version"},
-    @{Name="Hurl"; Command="hurl"; Arg="--version"}
+    @{Name = "Chocolatey"; Command = "choco"; Arg = "-v" },
+    @{Name = "Go"; Command = "go"; Arg = "version" },
+    @{Name = "Git"; Command = "git"; Arg = "--version" },
+    @{Name = "Task"; Command = "task"; Arg = "--version" },
+    @{Name = "Packer"; Command = "packer"; Arg = "version" },
+    @{Name = "GoReleaser"; Command = "goreleaser"; Arg = "--version" },
+    @{Name = "Hurl"; Command = "hurl"; Arg = "--version" },
+    @{Name = "Tailscale"; Command = "tailscale"; Arg = "version" }
 )
 
 foreach ($tool in $tools) {
     if (Test-Command $tool.Command) {
         $version = Get-CommandVersion $tool.Command $tool.Arg
-        Write-Host "  ✓ $($tool.Name): $version" -ForegroundColor Gray
-    } else {
-        Write-Host "  ✗ $($tool.Name): Not available" -ForegroundColor Yellow
+        Write-Host "  [OK] $($tool.Name): $version" -ForegroundColor Gray
+    }
+    else {
+        Write-Host "  [X] $($tool.Name): Not available" -ForegroundColor Yellow
     }
 }
 
@@ -418,10 +445,7 @@ Write-Host "  6. For production: Build VM template with Packer:" -ForegroundColo
 Write-Host "       cd packer" -ForegroundColor Gray
 Write-Host "       packer init ." -ForegroundColor Gray
 Write-Host "       packer build windows-runner.pkr.hcl" -ForegroundColor Gray
-Write-Host "       Copy-Item `".\output-windows-runner\Virtual Hard Disks\*.vhdx`" `"..\vms\templates\runner-template.vhdx`"" -ForegroundColor Gray
+Write-Host "       Copy vhdx file to templates directory" -ForegroundColor Gray
 Write-Host ""
 Write-Host "  7. For more information, see README.md" -ForegroundColor White
-Write-Host ""
-
-Write-Host "Happy coding!" -ForegroundColor Cyan
 Write-Host ""
