@@ -239,34 +239,7 @@ else {
     }
 }
 
-# Step 7: Install Hurl
-if (Test-Command "hurl") {
-    $hurlVersion = Get-CommandVersion "hurl" "--version"
-    Write-Success "Hurl is already installed ($hurlVersion)"
-}
-else {
-    Write-Info "Installing Hurl..."
-    try {
-        choco install hurl -y
-
-        # Refresh environment variables
-        $env:Path = [System.Environment]::GetEnvironmentVariable("Path", "Machine") + ";" + [System.Environment]::GetEnvironmentVariable("Path", "User")
-
-        if (Test-Command "hurl") {
-            $hurlVersion = Get-CommandVersion "hurl" "--version"
-            Write-Success "Hurl installed successfully ($hurlVersion)"
-        }
-        else {
-            Write-Error-Custom "Hurl installation completed but 'hurl' command not found. You may need to restart your terminal."
-        }
-    }
-    catch {
-        Write-Error-Custom "Failed to install Hurl: $_"
-        Write-Info "Continuing with other installations..."
-    }
-}
-
-# Step 8: Check Hyper-V
+# Step 7: Check Hyper-V
 try {
     $hypervFeature = Get-WindowsOptionalFeature -FeatureName Microsoft-Hyper-V-All -Online
 
@@ -300,7 +273,7 @@ catch {
     Write-Info "You may need to enable Hyper-V manually for production use"
 }
 
-# Step 9: Create directory structure
+# Step 8: Create directory structure
 $directories = @(
     "vms\templates",
     "vms\storage"
@@ -330,7 +303,7 @@ Write-Info "To use a different location, set these environment variables in .env
 Write-Host "  VM_TEMPLATE_PATH=C:\your\custom\path\runner-template.vhdx" -ForegroundColor Gray
 Write-Host "  VM_STORAGE_PATH=C:\your\custom\storage\path" -ForegroundColor Gray
 
-# Step 10: Setup environment file
+# Step 9: Setup environment file
 if (Test-Path ".env") {
     Write-Success ".env file already exists"
 }
@@ -345,7 +318,7 @@ else {
     }
 }
 
-# Step 11: Initialize Go modules
+# Step 10: Initialize Go modules
 if (Test-Path "go.mod") {
     if (Test-Command "go") {
         try {
@@ -368,33 +341,6 @@ else {
     Write-Info "go.mod not found in current directory, skipping"
 }
 
-# Optional: Ask about Tailscale (for production webhook ingress)
-if (Test-Command "tailscale") {
-    Write-Success "Tailscale is already installed"
-}
-else {
-    Write-Host "  Tailscale is needed for production webhook ingress" -ForegroundColor Gray
-    Write-Host "  For development, this is optional." -ForegroundColor Gray
-    $installTailscale = Read-Host "  Do you want to install Tailscale? (y/n)"
-
-    if ($installTailscale -eq 'y' -or $installTailscale -eq 'Y') {
-        Write-Info "Installing Tailscale..."
-        try {
-            choco install tailscale -y
-            Write-Success "Tailscale installed successfully"
-            Write-Info "After reboot, run: tailscale login"
-            Write-Info "Then for webhook ingress: tailscale funnel 8080"
-        }
-        catch {
-            Write-Error-Custom "Failed to install Tailscale: $_"
-            Write-Info "You can install it manually from https://tailscale.com/download/windows"
-        }
-    }
-    else {
-        Write-Info "Skipping Tailscale installation"
-    }
-}
-
 # Summary
 Write-Host ""
 Write-Host "========================================================" -ForegroundColor Cyan
@@ -409,9 +355,7 @@ $tools = @(
     @{Name = "Git"; Command = "git"; Arg = "--version" },
     @{Name = "Task"; Command = "task"; Arg = "--version" },
     @{Name = "Packer"; Command = "packer"; Arg = "version" },
-    @{Name = "GoReleaser"; Command = "goreleaser"; Arg = "--version" },
-    @{Name = "Hurl"; Command = "hurl"; Arg = "--version" },
-    @{Name = "Tailscale"; Command = "tailscale"; Arg = "version" }
+    @{Name = "GoReleaser"; Command = "goreleaser"; Arg = "--version" }
 )
 
 foreach ($tool in $tools) {

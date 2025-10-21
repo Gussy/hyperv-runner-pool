@@ -1,83 +1,11 @@
 package main
 
 import (
-	"bytes"
-	"crypto/hmac"
-	"crypto/sha256"
-	"encoding/hex"
 	"encoding/json"
 	"log/slog"
-	"net/http"
-	"net/http/httptest"
 	"os"
 	"testing"
-
-	"github.com/gorilla/mux"
 )
-
-// ========================================
-// Webhook Signature Verification Tests
-// ========================================
-
-func TestVerifySignature_Valid(t *testing.T) {
-	secret := "test-secret"
-	payload := []byte(`{"action":"queued"}`)
-
-	// Generate valid signature
-	mac := hmac.New(sha256.New, []byte(secret))
-	mac.Write(payload)
-	signature := "sha256=" + hex.EncodeToString(mac.Sum(nil))
-
-	if !verifySignature(payload, signature, secret) {
-		t.Error("Valid signature was rejected")
-	}
-}
-
-func TestVerifySignature_Invalid(t *testing.T) {
-	secret := "test-secret"
-	payload := []byte(`{"action":"queued"}`)
-	signature := "sha256=invalid_signature_here"
-
-	if verifySignature(payload, signature, secret) {
-		t.Error("Invalid signature was accepted")
-	}
-}
-
-func TestVerifySignature_WrongPrefix(t *testing.T) {
-	secret := "test-secret"
-	payload := []byte(`{"action":"queued"}`)
-	signature := "sha1=somesignature"
-
-	if verifySignature(payload, signature, secret) {
-		t.Error("Signature with wrong prefix was accepted")
-	}
-}
-
-func TestVerifySignature_MissingPrefix(t *testing.T) {
-	secret := "test-secret"
-	payload := []byte(`{"action":"queued"}`)
-	signature := "justasignature"
-
-	if verifySignature(payload, signature, secret) {
-		t.Error("Signature without prefix was accepted")
-	}
-}
-
-func TestVerifySignature_WrongSecret(t *testing.T) {
-	secret := "test-secret"
-	wrongSecret := "wrong-secret"
-	payload := []byte(`{"action":"queued"}`)
-
-	// Generate signature with correct secret
-	mac := hmac.New(sha256.New, []byte(secret))
-	mac.Write(payload)
-	signature := "sha256=" + hex.EncodeToString(mac.Sum(nil))
-
-	// Verify with wrong secret
-	if verifySignature(payload, signature, wrongSecret) {
-		t.Error("Signature verified with wrong secret")
-	}
-}
 
 // ========================================
 // Mock VM Manager Tests
@@ -143,6 +71,52 @@ func TestMockVMManager_DestroyVM(t *testing.T) {
 	}
 }
 
+func TestMockVMManager_GetVMState(t *testing.T) {
+	manager := NewMockVMManager(testLogger())
+	slot := &VMSlot{
+		Name:  "test-runner-1",
+		State: StateEmpty,
+	}
+
+	// Create VM first
+	err := manager.CreateVM(slot)
+	if err != nil {
+		t.Fatalf("Failed to create VM: %v", err)
+	}
+
+	// Get VM state
+	state, err := manager.GetVMState(slot.Name)
+	if err != nil {
+		t.Fatalf("Failed to get VM state: %v", err)
+	}
+
+	if state != "Running" {
+		t.Errorf("Expected state 'Running', got '%s'", state)
+	}
+
+	// Test nonexistent VM
+	_, err = manager.GetVMState("nonexistent")
+	if err == nil {
+		t.Error("Expected error for nonexistent VM, got nil")
+	}
+}
+
+func TestMockVMManager_InjectConfig(t *testing.T) {
+	manager := NewMockVMManager(testLogger())
+	config := RunnerConfig{
+		Token:        "test-token",
+		Organization: "test-org",
+		Repository:   "test-repo",
+		Name:         "runner-1",
+		Labels:       "self-hosted,Windows,X64,ephemeral",
+	}
+
+	err := manager.InjectConfig("/fake/path.vhdx", config)
+	if err != nil {
+		t.Fatalf("Failed to inject config: %v", err)
+	}
+}
+
 func TestMockVMManager_RunPowerShell(t *testing.T) {
 	manager := NewMockVMManager(testLogger())
 	output, err := manager.RunPowerShell("Get-VM")
@@ -157,17 +131,15 @@ func TestMockVMManager_RunPowerShell(t *testing.T) {
 }
 
 // ========================================
-// HTTP Handler Tests
+// Orchestrator Tests
 // ========================================
 
 func setupTestOrchestrator() *Orchestrator {
 	config := Config{
-		GitHubPAT:     "test-token",
-		GitHubOrg:     "test-org",
-		GitHubRepo:    "test-repo",
-		WebhookSecret: "test-secret",
-		Port:          "8080",
-		PoolSize:      2,
+		GitHubPAT:  "test-token",
+		GitHubOrg:  "test-org",
+		GitHubRepo: "test-repo",
+		PoolSize:   2,
 	}
 
 	vmManager := NewMockVMManager(testLogger())
@@ -184,180 +156,11 @@ func setupTestOrchestrator() *Orchestrator {
 	return orchestrator
 }
 
-func TestWebhookHandler_MissingSignature(t *testing.T) {
-	orchestrator := setupTestOrchestrator()
-
-	payload := []byte(`{"action":"queued"}`)
-	req := httptest.NewRequest("POST", "/webhook", bytes.NewBuffer(payload))
-	w := httptest.NewRecorder()
-
-	orchestrator.webhookHandler(w, req)
-
-	if w.Code != http.StatusUnauthorized {
-		t.Errorf("Expected status 401, got %d", w.Code)
-	}
-}
-
-func TestWebhookHandler_InvalidSignature(t *testing.T) {
-	orchestrator := setupTestOrchestrator()
-
-	payload := []byte(`{"action":"queued"}`)
-	req := httptest.NewRequest("POST", "/webhook", bytes.NewBuffer(payload))
-	req.Header.Set("X-Hub-Signature-256", "sha256=invalid")
-	w := httptest.NewRecorder()
-
-	orchestrator.webhookHandler(w, req)
-
-	if w.Code != http.StatusUnauthorized {
-		t.Errorf("Expected status 401, got %d", w.Code)
-	}
-}
-
-func TestWebhookHandler_ValidSignature(t *testing.T) {
-	orchestrator := setupTestOrchestrator()
-
-	payload := []byte(`{"action":"queued","workflow_job":{"id":123,"status":"queued"}}`)
-
-	// Generate valid signature
-	mac := hmac.New(sha256.New, []byte(orchestrator.config.WebhookSecret))
-	mac.Write(payload)
-	signature := "sha256=" + hex.EncodeToString(mac.Sum(nil))
-
-	req := httptest.NewRequest("POST", "/webhook", bytes.NewBuffer(payload))
-	req.Header.Set("X-Hub-Signature-256", signature)
-	w := httptest.NewRecorder()
-
-	orchestrator.webhookHandler(w, req)
-
-	if w.Code != http.StatusOK {
-		t.Errorf("Expected status 200, got %d", w.Code)
-	}
-}
-
-func TestHealthHandler(t *testing.T) {
-	orchestrator := setupTestOrchestrator()
-
-	req := httptest.NewRequest("GET", "/health", nil)
-	w := httptest.NewRecorder()
-
-	orchestrator.healthHandler(w, req)
-
-	if w.Code != http.StatusOK {
-		t.Errorf("Expected status 200, got %d", w.Code)
-	}
-
-	var response struct {
-		Status  string `json:"status"`
-		VMs     int    `json:"vms"`
-		Ready   int    `json:"ready"`
-		Running int    `json:"running"`
-	}
-
-	if err := json.Unmarshal(w.Body.Bytes(), &response); err != nil {
-		t.Fatalf("Failed to parse response: %v", err)
-	}
-
-	if response.Status != "healthy" {
-		t.Errorf("Expected status 'healthy', got '%s'", response.Status)
-	}
-
-	if response.VMs != orchestrator.config.PoolSize {
-		t.Errorf("Expected %d VMs, got %d", orchestrator.config.PoolSize, response.VMs)
-	}
-}
-
-func TestRunnerConfigHandler_VMNotFound(t *testing.T) {
-	orchestrator := setupTestOrchestrator()
-
-	req := httptest.NewRequest("GET", "/api/runner-config/nonexistent", nil)
-	w := httptest.NewRecorder()
-
-	// Setup mux to handle path variables
-	router := mux.NewRouter()
-	router.HandleFunc("/api/runner-config/{vmName}", orchestrator.runnerConfigHandler)
-	router.ServeHTTP(w, req)
-
-	if w.Code != http.StatusNotFound {
-		t.Errorf("Expected status 404, got %d", w.Code)
-	}
-}
-
-func TestRunnerConfigHandler_Success(t *testing.T) {
-	orchestrator := setupTestOrchestrator()
-
-	// Create a VM slot
-	slot := &VMSlot{
-		Name:        "runner-1",
-		State:       StateReady,
-		RunnerToken: "test-token-123",
-	}
-	orchestrator.vmPool[0] = slot
-
-	req := httptest.NewRequest("GET", "/api/runner-config/runner-1", nil)
-	w := httptest.NewRecorder()
-
-	// Setup mux to handle path variables
-	router := mux.NewRouter()
-	router.HandleFunc("/api/runner-config/{vmName}", orchestrator.runnerConfigHandler)
-	router.ServeHTTP(w, req)
-
-	if w.Code != http.StatusOK {
-		t.Errorf("Expected status 200, got %d", w.Code)
-	}
-
-	var config RunnerConfig
-	if err := json.Unmarshal(w.Body.Bytes(), &config); err != nil {
-		t.Fatalf("Failed to parse response: %v", err)
-	}
-
-	if config.Token != "test-token-123" {
-		t.Errorf("Expected token 'test-token-123', got '%s'", config.Token)
-	}
-
-	if config.Name != "runner-1" {
-		t.Errorf("Expected name 'runner-1', got '%s'", config.Name)
-	}
-
-	if config.Organization != orchestrator.config.GitHubOrg {
-		t.Errorf("Expected org '%s', got '%s'", orchestrator.config.GitHubOrg, config.Organization)
-	}
-}
-
-func TestRunnerCompleteHandler(t *testing.T) {
-	orchestrator := setupTestOrchestrator()
-
-	// Create a VM slot
-	slot := &VMSlot{
-		Name:  "runner-1",
-		State: StateRunning,
-	}
-	orchestrator.vmPool[0] = slot
-
-	req := httptest.NewRequest("POST", "/api/runner-complete/runner-1", nil)
-	w := httptest.NewRecorder()
-
-	// Setup mux to handle path variables
-	router := mux.NewRouter()
-	router.HandleFunc("/api/runner-complete/{vmName}", orchestrator.runnerCompleteHandler)
-	router.ServeHTTP(w, req)
-
-	if w.Code != http.StatusOK {
-		t.Errorf("Expected status 200, got %d", w.Code)
-	}
-
-	// Note: RecreateVM runs asynchronously, so we can't test the full flow here
-	// but we can verify the handler accepted the request
-}
-
-// ========================================
-// VM Pool Management Tests
-// ========================================
-
 func TestNewOrchestrator(t *testing.T) {
 	config := Config{
-		GitHubPAT:  "test-token",
-		GitHubOrg:  "test-org",
-		PoolSize:   4,
+		GitHubPAT: "test-token",
+		GitHubOrg: "test-org",
+		PoolSize:  4,
 	}
 
 	vmManager := NewMockVMManager(testLogger())
@@ -397,6 +200,56 @@ func TestVMSlot_StateTransitions(t *testing.T) {
 	}
 }
 
+func TestRecreateVM_VMNotFound(t *testing.T) {
+	orchestrator := setupTestOrchestrator()
+
+	err := orchestrator.RecreateVM("nonexistent")
+	if err == nil {
+		t.Error("Expected error for nonexistent VM, got nil")
+	}
+}
+
+// ========================================
+// RunnerConfig Tests
+// ========================================
+
+func TestRunnerConfig_JSONSerialization(t *testing.T) {
+	config := RunnerConfig{
+		Token:        "test-token-123",
+		Organization: "test-org",
+		Repository:   "test-repo",
+		Name:         "runner-1",
+		Labels:       "self-hosted,Windows,X64,ephemeral",
+	}
+
+	// Serialize to JSON
+	jsonData, err := json.Marshal(config)
+	if err != nil {
+		t.Fatalf("Failed to marshal config: %v", err)
+	}
+
+	// Deserialize from JSON
+	var decoded RunnerConfig
+	if err := json.Unmarshal(jsonData, &decoded); err != nil {
+		t.Fatalf("Failed to unmarshal config: %v", err)
+	}
+
+	// Verify fields
+	if decoded.Token != config.Token {
+		t.Errorf("Token mismatch: expected '%s', got '%s'", config.Token, decoded.Token)
+	}
+	if decoded.Organization != config.Organization {
+		t.Errorf("Organization mismatch: expected '%s', got '%s'", config.Organization, decoded.Organization)
+	}
+	if decoded.Name != config.Name {
+		t.Errorf("Name mismatch: expected '%s', got '%s'", config.Name, decoded.Name)
+	}
+}
+
+// ========================================
+// Utility Function Tests
+// ========================================
+
 func TestGetEnvOrDefault(t *testing.T) {
 	// Test with unset environment variable
 	result := getEnvOrDefault("NONEXISTENT_VAR_12345", "default-value")
@@ -404,8 +257,14 @@ func TestGetEnvOrDefault(t *testing.T) {
 		t.Errorf("Expected 'default-value', got '%s'", result)
 	}
 
-	// Note: We can't easily test the case where the env var is set
-	// without potentially interfering with other tests
+	// Test with set environment variable
+	os.Setenv("TEST_VAR_12345", "actual-value")
+	defer os.Unsetenv("TEST_VAR_12345")
+
+	result = getEnvOrDefault("TEST_VAR_12345", "default-value")
+	if result != "actual-value" {
+		t.Errorf("Expected 'actual-value', got '%s'", result)
+	}
 }
 
 // ========================================
@@ -473,31 +332,18 @@ func TestConcurrentVMOperations(t *testing.T) {
 // ========================================
 
 func TestOrchestratorInitializePool(t *testing.T) {
-	// This test requires mocking the GitHub API, so we skip the actual
-	// initialization and just test the structure
 	config := Config{
-		GitHubPAT:     "test-token",
-		GitHubOrg:     "test-org",
-		GitHubRepo:    "test-repo",
-		WebhookSecret: "test-secret",
-		PoolSize:      2,
+		GitHubPAT:  "test-token",
+		GitHubOrg:  "test-org",
+		GitHubRepo: "test-repo",
+		PoolSize:   2,
 	}
 
 	vmManager := NewMockVMManager(testLogger())
 	orchestrator := NewOrchestrator(config, vmManager, testLogger())
 
-	// We can't test InitializePool directly without mocking the GitHub API
-	// but we can verify the structure is correct
+	// Verify the pool structure is correct
 	if len(orchestrator.vmPool) != 2 {
 		t.Errorf("Expected pool size 2, got %d", len(orchestrator.vmPool))
-	}
-}
-
-func TestRecreateVM_VMNotFound(t *testing.T) {
-	orchestrator := setupTestOrchestrator()
-
-	err := orchestrator.RecreateVM("nonexistent")
-	if err == nil {
-		t.Error("Expected error for nonexistent VM, got nil")
 	}
 }

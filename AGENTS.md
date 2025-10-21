@@ -9,35 +9,44 @@ This is a **Hyper-V Runner Pool** - a production-ready orchestrator for running 
 ## Core Architecture
 
 ### Single-File Design
-The entire orchestrator is implemented in `main.go` (~700 lines). This is intentional - the codebase uses a **monolithic single-file architecture** to keep deployment simple and reduce complexity for a focused tool.
+The entire orchestrator is implemented in `main.go` (~600 lines). This is intentional - the codebase uses a **monolithic single-file architecture** to keep deployment simple and reduce complexity for a focused tool.
 
 ### Key Components
 
-1. **VMManager Interface** (lines 80-84): Abstraction layer allowing platform-specific implementations
+1. **VMManager Interface**: Abstraction layer allowing platform-specific implementations
    - `HyperVManager`: Real Hyper-V operations on Windows (PowerShell commands)
    - `MockVMManager`: Simulated VMs for macOS development and testing
+   - Key methods: `CreateVM`, `DestroyVM`, `GetVMState`, `InjectConfig`
 
-2. **Orchestrator** (lines 229-403): Manages the VM pool lifecycle
+2. **Orchestrator**: Manages the VM pool lifecycle
    - Maintains a fixed-size pool of `VMSlot` structs
    - Handles VM creation, registration with GitHub, and recreation after jobs
    - Uses goroutines for concurrent VM operations
 
-3. **VM Lifecycle States** (lines 54-63):
+3. **VM Lifecycle States**:
    - `empty` → `creating` → `ready` → `running` → `destroying` → `empty`
    - State transitions are mutex-protected at the slot level
 
-4. **HTTP API** (lines 409-543): REST endpoints for GitHub webhooks and VM coordination
-   - `/webhook`: Receives GitHub webhook events (HMAC-SHA256 verified)
-   - `/api/runner-config/{vmName}`: VMs fetch registration tokens on boot
-   - `/api/runner-complete/{vmName}`: VMs notify job completion (triggers async recreation)
-   - `/health`: Health check with pool status
+4. **VM State Monitoring**: Serverless polling-based job completion detection
+   - Each VM has a dedicated monitoring goroutine (`MonitorVMState`)
+   - Polls VM state every 10 seconds via Hyper-V
+   - When VM state = "Off", triggers automatic recreation
+   - No external network access required
 
 ### VM Template Architecture
 
 VMs are created by copying a VHDX template file. The template contains:
 - Windows Server 2022 (via Packer)
 - GitHub Actions runner pre-installed
-- Startup script that auto-registers with orchestrator
+- Startup script that reads config from injected file (`C:\runner-config.json`)
+
+**Config Injection Process**:
+1. Orchestrator generates GitHub runner token
+2. Mounts VHDX, writes `runner-config.json`, unmounts
+3. Creates and starts VM
+4. VM boot script reads config from local file (no network call)
+5. VM runs single job (`--once` flag) then shuts down
+6. Orchestrator detects shutdown and recreates VM
 
 Two template options exist (see `packer/` directory):
 - **Minimal** (`windows-runner.pkr.hcl`): 30GB, ~45min build, basic tools
@@ -64,9 +73,6 @@ task release-snapshot
 task test
 # or: go test -v ./...
 
-# Run API tests (Hurl-based, auto-starts mock server)
-task test-api
-
 # Run all tests
 task test-all
 
@@ -84,20 +90,14 @@ task deps       # Download and tidy dependencies
 
 ## Testing Strategy
 
-The codebase uses **two complementary testing approaches**:
+The codebase uses **Go unit tests** (`main_test.go`) to test individual components in isolation:
+- Mock VM manager operations (CreateVM, DestroyVM, GetVMState, InjectConfig)
+- Orchestrator lifecycle management
+- RunnerConfig JSON serialization
+- Concurrent VM operations
+- State transitions
 
-1. **Go Unit Tests** (`main_test.go`): Test individual components in isolation
-   - Mock VM manager operations
-   - HTTP handler behavior with httptest
-   - Webhook signature verification
-   - Concurrent operations
-
-2. **API Integration Tests** (`tests/*.hurl`): Test the running server via HTTP
-   - Real HTTP requests against mock server
-   - Sequential test execution (01-health → 02-webhook → 03-runner-config → 04-runner-complete)
-   - Automatically managed server lifecycle
-
-When writing tests, **prefer unit tests for logic** and **use Hurl tests for API contract verification**.
+Tests run fast and require no external dependencies.
 
 ## Configuration
 
@@ -105,7 +105,6 @@ Environment variables are loaded directly (no config files). Required in product
 - `GITHUB_PAT`: Personal Access Token (repo or admin:org scope)
 - `GITHUB_ORG`: GitHub organization name
 - `GITHUB_REPO`: Repository name (empty for org-level runners)
-- `WEBHOOK_SECRET`: HMAC secret for webhook verification
 
 Development-specific:
 - `USE_MOCK=true`: Enable mock VM manager (automatically adds dummy credentials)
@@ -113,12 +112,10 @@ Development-specific:
 - `LOG_FORMAT`: text|json (default: text)
 
 Optional (with defaults):
-- `PORT`: HTTP server port (default: 8080)
 - `VM_TEMPLATE_PATH`: Path to VHDX template (default: `./vms/templates/runner-template.vhdx`)
 - `VM_STORAGE_PATH`: VM storage directory (default: `./vms/storage`)
-- `ORCHESTRATOR_IP`: IP for VMs to connect (default: localhost)
 
-Pool size is hardcoded to 4 in `main.go` line 634. Change the literal value to adjust.
+Pool size is hardcoded to 4 in `main.go`. Change the literal value to adjust.
 
 ## Production Deployment
 
@@ -129,15 +126,12 @@ Pool size is hardcoded to 4 in `main.go` line 634. Change the literal value to a
    Copy-Item ".\output-windows-runner\Virtual Hard Disks\*.vhdx" "..\vms\templates\runner-template.vhdx"
    ```
 
-2. **Configure GitHub webhook**: Repository/Org Settings → Webhooks
-   - URL: `https://your-machine.tail-scale.ts.net/webhook`
-   - Events: "Workflow jobs" only
-   - Secret: matches `WEBHOOK_SECRET`
-
-3. **Run orchestrator**:
+2. **Run orchestrator**:
    ```powershell
    .\start.ps1  # Loads .env and starts binary
    ```
+
+The orchestrator is fully self-contained and requires no external network access. It monitors VM state locally via Hyper-V and recreates VMs automatically when they shut down after job completion.
 
 ## Release Process
 
@@ -161,35 +155,45 @@ Release artifacts include binary, config templates, Packer files, and checksums.
 ### GitHub API Integration
 - Runner token generation hits `/repos/{org}/{repo}/actions/runners/registration-token` (repo) or `/orgs/{org}/actions/runners/registration-token` (org)
 - Tokens expire; generated fresh for each VM creation
-- Mock mode bypasses API with fake tokens (line 319)
+- Mock mode bypasses API with fake tokens
 
-### Webhook Verification
-The `verifySignature` function (lines 550-564) implements GitHub's HMAC-SHA256 signature verification. This is **security-critical** - do not modify without understanding the GitHub webhook signature spec.
+### VHDX Config Injection
+- `InjectConfig` method mounts VHDX before VM starts
+- Writes `runner-config.json` containing token, org, repo, labels
+- Unmounts VHDX (critical - VM won't start with mounted disk)
+- Config file is read by VM startup script on boot
 
 ### VM Recreation Flow
-When a VM completes a job (POST to `/api/runner-complete`):
-1. Handler immediately returns 200 OK
-2. Goroutine starts `RecreateVM` asynchronously
-3. VM transitions: running → destroying → (destroy) → creating → (create) → ready
-4. New GitHub token is generated during creation
-5. Pool slot is reused with new VM
+When a VM completes a job:
+1. VM runs GitHub Actions runner with `--once` flag (single job)
+2. Job completes, runner exits
+3. Startup script executes `Stop-Computer -Force`
+4. Monitoring goroutine (`MonitorVMState`) polls every 10s
+5. Detects VM state = "Off"
+6. Triggers `RecreateVM` asynchronously
+7. VM transitions: running → destroying → (destroy) → creating → (create) → ready
+8. New GitHub token is generated and injected during creation
+9. Pool slot is reused with fresh VM
 
 ### Concurrent Operations
-- VM pool initialization uses goroutines with WaitGroup (lines 252-284)
+- VM pool initialization uses goroutines with WaitGroup
 - Each VMSlot has its own mutex (fine-grained locking)
+- Each VM has a dedicated monitoring goroutine (started after creation)
 - Orchestrator mutex protects pool-level operations only
 
 ## Common Pitfalls
 
 1. **Don't modify PowerShell commands without Windows testing**: Mock manager doesn't catch syntax errors
-2. **Pool size changes**: Hardcoded at line 634, affects resource usage significantly (each VM = 2GB RAM)
+2. **Pool size changes**: Hardcoded in main.go, affects resource usage significantly (each VM = 2GB RAM)
 3. **Path handling**: Windows paths use backslashes; Go escapes them (`\\`) in format strings
-4. **Testing webhook signatures**: Must use valid HMAC; test helpers in `main_test.go` show correct generation
-5. **Hermit package manager**: Project uses Hermit (`bin/hermit.hcl`) for Go, Task, GoReleaser, Hurl - use `bin/` prefix for commands
+4. **VHDX mounting**: Must unmount before starting VM, or VM creation will fail
+5. **Polling interval**: 10-second polling means ~10s delay before recreation starts (acceptable trade-off for simplicity)
+6. **Hermit package manager**: Project uses Hermit (`bin/hermit.hcl`) for Go, Task, GoReleaser - use `bin/` prefix for commands
 
 ## Notes for Future Development
 
 - The single-file architecture is intentional; resist splitting unless complexity truly demands it
-- If adding new VM states, update `VMState` enum and health endpoint logic
-- New API endpoints should follow the pattern: handler → orchestrator method → VM manager operation
+- If adding new VM states, update `VMState` enum and monitoring logic
+- The serverless polling architecture eliminates need for external network access or webhook configuration
 - GitHub API rate limits aren't handled; consider implementing backoff if scaling beyond ~10 VMs
+- Polling interval can be tuned (currently 10s) - lower = faster recreation but more CPU/API calls

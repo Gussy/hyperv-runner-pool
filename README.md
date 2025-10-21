@@ -7,29 +7,31 @@ A production-ready pool manager for running GitHub Actions workflows in ephemera
 - **Ephemeral VMs**: Fresh VM for every job - zero state leakage between runs
 - **Concurrent Execution**: Pool of VMs ready to handle multiple jobs simultaneously
 - **Automatic Lifecycle Management**: VMs are created, registered, and destroyed automatically
-- **Webhook-Driven**: Responds to GitHub webhook events for job queuing
+- **Serverless Polling**: Monitors VM state locally - no external network required
 - **Cross-Platform Development**: Develop and test on macOS, deploy to Windows
-- **Production Ready**: Full HMAC signature verification, error handling, and logging
+- **Production Ready**: Robust error handling, structured logging, and concurrent operations
 - **Flexible Images**: Choose between minimal (fast) or enhanced (GitHub-compatible) VM templates
+- **Air-Gappable**: Works on isolated networks with no inbound internet access
 
 ## Architecture
 
 ```
 ┌─────────────────────────────────────────────────────────────┐
 │                         GitHub                              │
-│  ┌──────────────┐          ┌──────────────┐                 │
-│  │  Repository  │ ──────►  │   Webhooks   │                 │
-│  └──────────────┘          └───────┬──────┘                 │
-└────────────────────────────────────┼────────────────────────┘
-                                     │
-                                     ▼
-                          ┌──────────────────┐
+│  ┌──────────────┐                                            │
+│  │  Repository  │ ◄────── Runners register & pull jobs      │
+│  └──────────────┘                                            │
+└─────────────────────────────────────────────────────────────┘
+                                   ▲
+                                   │
+                          ┌────────┴─────────┐
                           │   Orchestrator   │
-                          │   (Go Server)    │
+                          │    (Go Binary)   │
                           │                  │
-                          │  - Webhook       │
                           │  - VM Pool Mgmt  │
+                          │  - State Monitor │
                           │  - GitHub API    │
+                          │  - VHDX Inject   │
                           └────────┬─────────┘
                                    │
               ┌────────────────────┼────────────────────┐
@@ -40,6 +42,9 @@ A production-ready pool manager for running GitHub Actions workflows in ephemera
         │ Runner  │          │ Runner  │          │ Runner  │
         └─────────┘          └─────────┘          └─────────┘
         (Ephemeral)          (Ephemeral)          (Ephemeral)
+         Shutdown             Shutdown             Shutdown
+         triggers             triggers             triggers
+         recreation           recreation           recreation
 ```
 
 ## Prerequisites
@@ -78,7 +83,6 @@ cp .env.example .env
 #   - GITHUB_PAT (your Personal Access Token)
 #   - GITHUB_ORG (your organization)
 #   - GITHUB_REPO (your repository, or leave empty for org runners)
-#   - WEBHOOK_SECRET (generate with: openssl rand -hex 32)
 #   - USE_MOCK=true (for macOS testing)
 ```
 
@@ -297,33 +301,14 @@ Copy-Item ".\output-windows-runner\Virtual Hard Disks\*.vhdx" `
           "C:\your\custom\path\runner-template.vhdx"
 ```
 
-### Phase 3: Setup Tailscale (for webhook ingress)
+### Phase 3: Configure GitHub
 
-```powershell
-# Install from https://tailscale.com/download/windows
-# Then:
-tailscale login
-tailscale funnel 8080
+**Generate Personal Access Token**
+- Go to GitHub Settings → Developer settings → Personal access tokens
+- For repository runners: `repo` scope
+- For organization runners: `admin:org` → `manage_runners:org`
 
-# Note your public URL
-tailscale status
-```
-
-### Phase 4: Configure GitHub
-
-1. **Generate Personal Access Token**
-   - Go to GitHub Settings → Developer settings → Personal access tokens
-   - For repository runners: `repo` scope
-   - For organization runners: `admin:org` → `manage_runners:org`
-
-2. **Configure Webhook**
-   - Repository/Org Settings → Webhooks → Add webhook
-   - Payload URL: `https://your-machine.tail-scale.ts.net/webhook`
-   - Content type: `application/json`
-   - Secret: (paste your WEBHOOK_SECRET from .env)
-   - Events: Select "Workflow jobs" only
-
-### Phase 5: Run Orchestrator
+### Phase 4: Run Orchestrator
 
 ```powershell
 # Copy binary from macOS build or build on Windows
@@ -346,10 +331,9 @@ notepad .env  # Fill in real values
 | `GITHUB_PAT` | Yes | GitHub Personal Access Token |
 | `GITHUB_ORG` | Yes | GitHub organization name |
 | `GITHUB_REPO` | No | Repository name (empty for org runners) |
-| `WEBHOOK_SECRET` | Yes | Webhook signature verification secret |
-| `PORT` | No | HTTP server port (default: 8080) |
 | `USE_MOCK` | No | Use mock VMs for testing (true/false) |
-| `ORCHESTRATOR_IP` | No | IP address for VMs to connect (default: localhost) |
+| `LOG_LEVEL` | No | Logging level: debug, info, warn, error (default: info) |
+| `LOG_FORMAT` | No | Log format: text, json (default: text) |
 | `VM_TEMPLATE_PATH` | No | Full path to template VHDX (default: `.\vms\templates\runner-template.vhdx`) |
 | `VM_STORAGE_PATH` | No | Directory for VM storage (default: `.\vms\storage`) |
 
@@ -366,47 +350,23 @@ The application uses sensible defaults:
 - Gitignored: VM files won't be committed
 - Override-friendly: Set custom paths via environment variables
 
-## API Endpoints
+## How It Works
 
-### `POST /webhook`
-Receives GitHub webhook events for job queuing.
+1. **Orchestrator starts** and creates a warm pool of VMs
+2. **For each VM**:
+   - Generates fresh GitHub runner token via API
+   - Mounts VHDX, injects `runner-config.json`, unmounts
+   - Creates and starts VM
+   - VM boots and reads config from injected file
+   - VM registers with GitHub as ephemeral runner
+3. **GitHub assigns jobs** to available runners
+4. **Runner executes job** with `--once` flag (single job mode)
+5. **Job completes**, runner exits, VM shuts down
+6. **Orchestrator detects shutdown** via polling (every 10s)
+7. **VM is destroyed and recreated** with fresh token
+8. **Cycle repeats** indefinitely
 
-**Headers:**
-- `X-Hub-Signature-256`: HMAC-SHA256 signature
-
-**Response:** `200 OK`
-
-### `GET /api/runner-config/{vmName}`
-Provides runner configuration to VMs on boot.
-
-**Response:**
-```json
-{
-  "token": "registration-token",
-  "organization": "your-org",
-  "repository": "your-repo",
-  "name": "runner-1",
-  "labels": "self-hosted,Windows,X64,ephemeral"
-}
-```
-
-### `POST /api/runner-complete/{vmName}`
-Notifies orchestrator that a job completed.
-
-**Response:** `200 OK`
-
-### `GET /health`
-Health check endpoint.
-
-**Response:**
-```json
-{
-  "status": "healthy",
-  "vms": 4,
-  "ready": 3,
-  "running": 1
-}
-```
+No webhooks, no inbound network access required.
 
 ## Development Workflow
 
@@ -468,14 +428,8 @@ Copy-Item hyperv-runner-pool.exe C:\runner\
 
 1. Check orchestrator logs for errors
 2. Verify GitHub PAT has correct permissions
-3. Ensure VM can reach orchestrator IP
-4. Test health endpoint: `curl http://localhost:8080/health`
-
-### Webhook Not Triggering
-
-1. Check webhook delivery in GitHub Settings → Webhooks → Recent Deliveries
-2. Verify Tailscale Funnel is running: `tailscale status`
-3. Test webhook signature verification in logs
+3. Ensure Windows machine has internet access to reach GitHub API
+4. Check VM startup logs for runner registration errors
 
 ### VM Creation Fails
 
@@ -484,13 +438,22 @@ Copy-Item hyperv-runner-pool.exe C:\runner\
 3. Ensure sufficient disk space (40GB+ for minimal, 100GB+ for enhanced)
 4. Check orchestrator logs for PowerShell errors
 5. Verify paths in startup logs or check your `.env` for custom paths
+6. Ensure VHDX is not mounted elsewhere (prevents VM creation)
+
+### VMs Not Recreating After Jobs
+
+1. Check monitoring goroutine logs
+2. Verify VM is actually shutting down after job completion
+3. Check `MonitorVMState` polling interval (default: 10s)
+4. Ensure orchestrator has permissions to query Hyper-V state
 
 ### Performance Issues
 
-1. Increase VM resources (CPU, memory) in HyperVManager
+1. Increase VM resources (CPU, memory) in main.go HyperVManager
 2. Use differencing disks (advanced)
 3. Reduce pool size if system is overloaded
 4. Monitor disk I/O
+5. Adjust polling interval if recreation is too slow
 
 ## Project Structure
 
@@ -519,11 +482,12 @@ Copy-Item hyperv-runner-pool.exe C:\runner\
 
 ## Security Considerations
 
-- Webhook signatures are verified using HMAC-SHA256
 - GitHub PAT should be kept secure and rotated regularly
 - VMs are ephemeral - no persistent state between jobs
 - Template VHDX should be read-only to prevent tampering
-- Use Tailscale Funnel for secure webhook ingress
+- No inbound network access required - orchestrator polls locally
+- Config injection writes sensitive tokens to VHDX temporarily (unmounted after)
+- Runs entirely on local network - no external webhook endpoints to secure
 
 ## Performance Metrics
 

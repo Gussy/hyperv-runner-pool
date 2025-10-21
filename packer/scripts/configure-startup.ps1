@@ -11,31 +11,28 @@ $ErrorActionPreference = "Stop"
 $runnerPath = "C:\actions-runner"
 Set-Location $runnerPath
 
-# Wait for network to be ready
-Write-Host "Waiting for network..."
-Start-Sleep -Seconds 10
+# Wait for disk to be ready
+Write-Host "Waiting for system initialization..."
+Start-Sleep -Seconds 5
 
-# Get VM name from computer name
-$vmName = $env:COMPUTERNAME
+# Read runner configuration from injected file
+$configPath = "C:\runner-config.json"
+Write-Host "Reading runner configuration from $configPath..."
 
-# Get orchestrator IP from environment or use default
-$orchestratorIP = if ($env:ORCHESTRATOR_IP) { $env:ORCHESTRATOR_IP } else { "localhost" }
-$configUrl = "http://${orchestratorIP}:8080/api/runner-config/${vmName}"
-$completeUrl = "http://${orchestratorIP}:8080/api/runner-complete/${vmName}"
-
-Write-Host "VM Name: $vmName"
-Write-Host "Orchestrator: $orchestratorIP"
-
-# Fetch configuration from orchestrator
-Write-Host "Fetching runner configuration from orchestrator..."
-try {
-    $config = Invoke-RestMethod -Uri $configUrl -Method Get -TimeoutSec 30
-} catch {
-    Write-Error "Failed to fetch configuration: $_"
+if (-not (Test-Path $configPath)) {
+    Write-Error "Configuration file not found at $configPath"
     exit 1
 }
 
-Write-Host "Configuration received:"
+try {
+    $configJson = Get-Content -Path $configPath -Raw
+    $config = $configJson | ConvertFrom-Json
+} catch {
+    Write-Error "Failed to read configuration: $_"
+    exit 1
+}
+
+Write-Host "Configuration loaded:"
 Write-Host "  Organization: $($config.organization)"
 Write-Host "  Repository: $($config.repository)"
 Write-Host "  Name: $($config.name)"
@@ -80,20 +77,13 @@ if ($LASTEXITCODE -ne 0) {
 Write-Host "Runner configured successfully!"
 
 # Run the runner (this will block until job completes)
-Write-Host "Starting runner..."
-& .\run.cmd
+# Using --once flag to run a single job then exit
+Write-Host "Starting runner (single job mode)..."
+& .\run.cmd --once
 
-# When runner completes (job done), notify orchestrator
-Write-Host "Job completed. Notifying orchestrator..."
-try {
-    Invoke-RestMethod -Uri $completeUrl -Method Post -TimeoutSec 30
-    Write-Host "Orchestrator notified. VM will be recreated."
-} catch {
-    Write-Warning "Failed to notify orchestrator: $_"
-}
-
-# Shutdown the VM (orchestrator will destroy it)
-Write-Host "Shutting down VM..."
+# When runner completes, shutdown the VM
+# The orchestrator will detect the shutdown and recreate the VM
+Write-Host "Job completed. Shutting down VM..."
 Start-Sleep -Seconds 5
 Stop-Computer -Force
 '@

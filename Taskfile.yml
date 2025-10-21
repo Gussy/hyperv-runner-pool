@@ -22,7 +22,7 @@ tasks:
       - go build -o {{.BINARY_NAME}}
 
   test:
-    desc: Run Go unit tests
+    desc: Run unit tests (mock VM manager, orchestrator, concurrent operations)
     cmds:
       - go test -v ./...
 
@@ -31,71 +31,13 @@ tasks:
     cmds:
       - go test -v -short ./...
 
-  test-api:
-    desc: Run hurl API tests (auto-starts server in mock mode)
-    cmds:
-      - |
-        # Clean up any old servers first
-        echo "Cleaning up old server processes..."
-        lsof -ti:8080 2>/dev/null | xargs kill -9 2>/dev/null || true
-        pkill -9 -f "go run main.go" 2>/dev/null || true
-        sleep 1
-
-        echo "Starting mock server..."
-        USE_MOCK=true go run main.go > /tmp/warc-server.log 2>&1 &
-        SERVER_PID=$!
-        echo "Server PID: $SERVER_PID"
-
-        # Wait for server to be ready and all VMs initialized
-        echo "Waiting for server to be ready..."
-        for i in {1..60}; do
-          if curl -s http://localhost:8080/health > /dev/null 2>&1; then
-            # Use jq to parse JSON if available, otherwise just wait a bit
-            if command -v jq > /dev/null 2>&1; then
-              READY=$(curl -s http://localhost:8080/health | jq -r '.ready')
-              TOTAL=$(curl -s http://localhost:8080/health | jq -r '.vms')
-              if [ "$READY" = "$TOTAL" ] && [ "$READY" != "null" ]; then
-                echo "Server is ready with $READY/$TOTAL VMs initialized!"
-                break
-              fi
-              echo "Waiting... ($READY/$TOTAL VMs ready)"
-            else
-              # Fallback: just wait for health to respond
-              echo "Server is responding, waiting a bit more for VMs..."
-              sleep 2
-              break
-            fi
-          fi
-          sleep 0.5
-        done
-
-        # Run tests sequentially (one file at a time)
-        echo "Running hurl tests..."
-        TEST_EXIT=0
-        for test_file in tests/01-health.hurl tests/02-webhook.hurl tests/03-runner-config.hurl tests/04-runner-complete.hurl; do
-          echo "Running $test_file..."
-          if ! hurl --test "$test_file"; then
-            TEST_EXIT=1
-          fi
-        done
-
-        # Cleanup: kill server thoroughly
-        echo "Stopping server..."
-        kill -9 $SERVER_PID 2>/dev/null || true
-        lsof -ti:8080 2>/dev/null | xargs kill -9 2>/dev/null || true
-        pkill -9 -f "go run main.go" 2>/dev/null || true
-
-        # Return test exit code
-        exit $TEST_EXIT
-
   test-all:
-    desc: Run all tests (Go unit tests and API tests)
+    desc: Run all tests (same as test - no separate API tests)
     cmds:
       - task: test
-      - task: test-api
 
   run:
-    desc: Run with mock VMs (development mode)
+    desc: Run orchestrator with mock VMs (serverless polling mode)
     env:
       USE_MOCK: "true"
     cmds:

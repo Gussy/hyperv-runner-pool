@@ -18,8 +18,6 @@ if (-not (Test-Path ".env")) {
     Write-Host "     - GITHUB_PAT: Your GitHub Personal Access Token"
     Write-Host "     - GITHUB_ORG: Your organization name"
     Write-Host "     - GITHUB_REPO: Your repository name (or leave empty for org runners)"
-    Write-Host "     - WEBHOOK_SECRET: Your webhook secret"
-    Write-Host "     - ORCHESTRATOR_IP: Your machine's IP address"
     Write-Host ""
     Write-Host "Example:"
     Write-Host "  Copy-Item .env.example .env"
@@ -42,7 +40,7 @@ Get-Content ".env" | ForEach-Object {
 Write-Host ""
 
 # Validate required environment variables
-$required = @("GITHUB_PAT", "GITHUB_ORG", "WEBHOOK_SECRET")
+$required = @("GITHUB_PAT", "GITHUB_ORG")
 $missing = @()
 
 foreach ($var in $required) {

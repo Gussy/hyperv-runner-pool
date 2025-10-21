@@ -1,9 +1,6 @@
 package main
 
 import (
-	"crypto/hmac"
-	"crypto/sha256"
-	"encoding/hex"
 	"encoding/json"
 	"fmt"
 	"io"
@@ -14,8 +11,6 @@ import (
 	"strings"
 	"sync"
 	"time"
-
-	"github.com/gorilla/mux"
 )
 
 // Version information (set by GoReleaser during build)
@@ -31,15 +26,12 @@ var (
 
 // Config holds the application configuration
 type Config struct {
-	GitHubPAT      string
-	GitHubOrg      string
-	GitHubRepo     string
-	WebhookSecret  string
-	Port           string
-	PoolSize       int
-	TemplatePath   string
-	VMStoragePath  string
-	OrchestratorIP string
+	GitHubPAT     string
+	GitHubOrg     string
+	GitHubRepo    string
+	PoolSize      int
+	TemplatePath  string
+	VMStoragePath string
 }
 
 // RunnerConfig is the configuration sent to VMs for runner registration
@@ -80,6 +72,8 @@ type VMSlot struct {
 type VMManager interface {
 	CreateVM(slot *VMSlot) error
 	DestroyVM(slot *VMSlot) error
+	GetVMState(vmName string) (string, error)
+	InjectConfig(vhdxPath string, config RunnerConfig) error
 	RunPowerShell(command string) (string, error)
 }
 
@@ -114,6 +108,19 @@ func (h *HyperVManager) CreateVM(slot *VMSlot) error {
 	)
 	if _, err := h.RunPowerShell(copyCmd); err != nil {
 		return fmt.Errorf("failed to copy template: %w", err)
+	}
+
+	// Inject runner config into VHDX (before creating VM)
+	runnerConfig := RunnerConfig{
+		Token:        slot.RunnerToken,
+		Organization: h.config.GitHubOrg,
+		Repository:   h.config.GitHubRepo,
+		Name:         vmName,
+		Labels:       "self-hosted,Windows,X64,ephemeral",
+	}
+
+	if err := h.InjectConfig(vhdxPath, runnerConfig); err != nil {
+		return fmt.Errorf("failed to inject config: %w", err)
 	}
 
 	// Create VM
@@ -161,6 +168,61 @@ func (h *HyperVManager) DestroyVM(slot *VMSlot) error {
 	return nil
 }
 
+// GetVMState returns the current state of a VM (Running, Off, Stopped, etc.)
+func (h *HyperVManager) GetVMState(vmName string) (string, error) {
+	cmd := fmt.Sprintf(`(Get-VM -Name "%s").State`, vmName)
+	output, err := h.RunPowerShell(cmd)
+	if err != nil {
+		return "", fmt.Errorf("failed to get VM state: %w", err)
+	}
+	return strings.TrimSpace(output), nil
+}
+
+// InjectConfig mounts the VHDX, writes runner config, then unmounts
+func (h *HyperVManager) InjectConfig(vhdxPath string, config RunnerConfig) error {
+	// Mount the VHDX
+	mountCmd := fmt.Sprintf(`
+		$disk = Mount-VHD -Path "%s" -Passthru
+		$partition = Get-Partition -DiskNumber $disk.Number | Where-Object {$_.Type -eq 'Basic'}
+		$driveLetter = $partition.DriveLetter
+		$driveLetter
+	`, vhdxPath)
+
+	driveLetter, err := h.RunPowerShell(mountCmd)
+	if err != nil {
+		return fmt.Errorf("failed to mount VHDX: %w", err)
+	}
+	driveLetter = strings.TrimSpace(driveLetter)
+
+	// Ensure we unmount on exit
+	defer func() {
+		unmountCmd := fmt.Sprintf(`Dismount-VHD -Path "%s"`, vhdxPath)
+		if _, err := h.RunPowerShell(unmountCmd); err != nil {
+			h.logger.Warn("Failed to unmount VHDX", "path", vhdxPath, "error", err)
+		}
+	}()
+
+	// Write config file
+	configJSON, err := json.Marshal(config)
+	if err != nil {
+		return fmt.Errorf("failed to marshal config: %w", err)
+	}
+
+	// Escape single quotes in JSON for PowerShell
+	escapedJSON := strings.ReplaceAll(string(configJSON), "'", "''")
+
+	writeCmd := fmt.Sprintf(`
+		Set-Content -Path "%s:\runner-config.json" -Value '%s'
+	`, driveLetter, escapedJSON)
+
+	if _, err := h.RunPowerShell(writeCmd); err != nil {
+		return fmt.Errorf("failed to write config: %w", err)
+	}
+
+	h.logger.Debug("Config injected into VHDX", "path", vhdxPath)
+	return nil
+}
+
 // RunPowerShell executes a PowerShell command
 func (h *HyperVManager) RunPowerShell(command string) (string, error) {
 	cmd := exec.Command("powershell", "-Command", command)
@@ -198,7 +260,7 @@ func (m *MockVMManager) CreateVM(slot *VMSlot) error {
 	// Simulate creation delay
 	time.Sleep(500 * time.Millisecond)
 
-	m.simulatedVMs[slot.Name] = "running"
+	m.simulatedVMs[slot.Name] = "Running"
 	m.logger.Debug("VM created (simulated)", "vm_name", slot.Name)
 	return nil
 }
@@ -213,6 +275,24 @@ func (m *MockVMManager) DestroyVM(slot *VMSlot) error {
 
 	delete(m.simulatedVMs, slot.Name)
 	m.logger.Debug("VM destroyed (simulated)", "vm_name", slot.Name)
+	return nil
+}
+
+// GetVMState simulates getting VM state
+func (m *MockVMManager) GetVMState(vmName string) (string, error) {
+	m.mu.Lock()
+	defer m.mu.Unlock()
+
+	state, exists := m.simulatedVMs[vmName]
+	if !exists {
+		return "", fmt.Errorf("VM not found: %s", vmName)
+	}
+	return state, nil
+}
+
+// InjectConfig simulates config injection
+func (m *MockVMManager) InjectConfig(vhdxPath string, config RunnerConfig) error {
+	m.logger.Debug("Config injected (simulated)", "path", vhdxPath, "vm_name", config.Name)
 	return nil
 }
 
@@ -300,7 +380,7 @@ func (o *Orchestrator) createAndRegisterVM(slot *VMSlot) error {
 	slot.RunnerToken = token
 	slot.mu.Unlock()
 
-	// Create the VM
+	// Create the VM (config is injected during creation)
 	if err := o.vmManager.CreateVM(slot); err != nil {
 		return fmt.Errorf("failed to create VM: %w", err)
 	}
@@ -308,6 +388,9 @@ func (o *Orchestrator) createAndRegisterVM(slot *VMSlot) error {
 	slot.mu.Lock()
 	slot.State = StateReady
 	slot.mu.Unlock()
+
+	// Start monitoring VM state in background
+	go o.MonitorVMState(slot)
 
 	o.logger.Info("VM ready and waiting for jobs", "vm_name", slot.Name)
 	return nil
@@ -403,165 +486,35 @@ func (o *Orchestrator) RecreateVM(vmName string) error {
 }
 
 // ========================================
-// HTTP Handlers
+// VM State Monitoring
 // ========================================
 
-// webhookHandler handles GitHub webhook events
-func (o *Orchestrator) webhookHandler(w http.ResponseWriter, r *http.Request) {
-	// Verify webhook signature
-	signature := r.Header.Get("X-Hub-Signature-256")
-	if signature == "" {
-		http.Error(w, "Missing signature", http.StatusUnauthorized)
-		return
-	}
+// MonitorVMState polls VM state and triggers recreation when VM stops
+func (o *Orchestrator) MonitorVMState(slot *VMSlot) {
+	ticker := time.NewTicker(10 * time.Second)
+	defer ticker.Stop()
 
-	body, err := io.ReadAll(r.Body)
-	if err != nil {
-		http.Error(w, "Failed to read body", http.StatusBadRequest)
-		return
-	}
+	for range ticker.C {
+		state, err := o.vmManager.GetVMState(slot.Name)
+		if err != nil {
+			o.logger.Error("Failed to get VM state", "vm_name", slot.Name, "error", err)
+			continue
+		}
 
-	if !verifySignature(body, signature, o.config.WebhookSecret) {
-		http.Error(w, "Invalid signature", http.StatusUnauthorized)
-		return
-	}
+		// If VM is stopped/off, it means job completed and VM shut down
+		if state == "Off" || state == "Stopped" {
+			o.logger.Info("VM stopped, recreating", "vm_name", slot.Name)
+			ticker.Stop()
 
-	// Parse webhook payload
-	var payload struct {
-		Action       string `json:"action"`
-		WorkflowJob  struct {
-			ID     int64  `json:"id"`
-			Status string `json:"status"`
-		} `json:"workflow_job"`
-	}
-
-	if err := json.Unmarshal(body, &payload); err != nil {
-		http.Error(w, "Invalid JSON", http.StatusBadRequest)
-		return
-	}
-
-	o.logger.Info("Webhook received",
-		"action", payload.Action,
-		"job_id", payload.WorkflowJob.ID,
-		"status", payload.WorkflowJob.Status)
-
-	// We primarily care about the 'queued' event
-	// The VM will pick up the job via GitHub's runner mechanism
-
-	w.WriteHeader(http.StatusOK)
-	w.Write([]byte("OK"))
-}
-
-// runnerConfigHandler provides configuration to VMs
-func (o *Orchestrator) runnerConfigHandler(w http.ResponseWriter, r *http.Request) {
-	vars := mux.Vars(r)
-	vmName := vars["vmName"]
-
-	// Find the slot
-	var slot *VMSlot
-	for _, s := range o.vmPool {
-		if s.Name == vmName {
-			slot = s
-			break
+			// Recreate the VM asynchronously
+			go func() {
+				if err := o.RecreateVM(slot.Name); err != nil {
+					o.logger.Error("Error recreating VM", "vm_name", slot.Name, "error", err)
+				}
+			}()
+			return
 		}
 	}
-
-	if slot == nil {
-		http.Error(w, "VM not found", http.StatusNotFound)
-		return
-	}
-
-	slot.mu.Lock()
-	token := slot.RunnerToken
-	state := slot.State
-	slot.mu.Unlock()
-
-	if state != StateReady {
-		http.Error(w, "VM not ready", http.StatusServiceUnavailable)
-		return
-	}
-
-	config := RunnerConfig{
-		Token:        token,
-		Organization: o.config.GitHubOrg,
-		Repository:   o.config.GitHubRepo,
-		Name:         vmName,
-		Labels:       "self-hosted,Windows,X64,ephemeral",
-	}
-
-	w.Header().Set("Content-Type", "application/json")
-	json.NewEncoder(w).Encode(config)
-
-	o.logger.Info("Configuration sent to VM", "vm_name", vmName)
-}
-
-// runnerCompleteHandler handles job completion notifications from VMs
-func (o *Orchestrator) runnerCompleteHandler(w http.ResponseWriter, r *http.Request) {
-	vars := mux.Vars(r)
-	vmName := vars["vmName"]
-
-	o.logger.Info("Job complete notification received", "vm_name", vmName)
-
-	// Recreate the VM asynchronously
-	go func() {
-		if err := o.RecreateVM(vmName); err != nil {
-			o.logger.Error("Error recreating VM", "vm_name", vmName, "error", err)
-		}
-	}()
-
-	w.WriteHeader(http.StatusOK)
-	w.Write([]byte("OK"))
-}
-
-// healthHandler provides health check endpoint
-func (o *Orchestrator) healthHandler(w http.ResponseWriter, r *http.Request) {
-	status := struct {
-		Status  string `json:"status"`
-		VMs     int    `json:"vms"`
-		Ready   int    `json:"ready"`
-		Running int    `json:"running"`
-	}{
-		Status: "healthy",
-		VMs:    len(o.vmPool),
-	}
-
-	for _, slot := range o.vmPool {
-		slot.mu.Lock()
-		state := slot.State
-		slot.mu.Unlock()
-
-		switch state {
-		case StateReady:
-			status.Ready++
-		case StateRunning:
-			status.Running++
-		}
-	}
-
-	w.Header().Set("Content-Type", "application/json")
-	json.NewEncoder(w).Encode(status)
-}
-
-// ========================================
-// Webhook Signature Verification
-// ========================================
-
-// verifySignature verifies the HMAC-SHA256 signature from GitHub
-func verifySignature(payload []byte, signature string, secret string) bool {
-	if len(signature) < 7 || signature[:7] != "sha256=" {
-		return false
-	}
-
-	expectedMAC, err := hex.DecodeString(signature[7:])
-	if err != nil {
-		return false
-	}
-
-	mac := hmac.New(sha256.New, []byte(secret))
-	mac.Write(payload)
-	actualMAC := mac.Sum(nil)
-
-	return hmac.Equal(actualMAC, expectedMAC)
 }
 
 // ========================================
@@ -626,15 +579,12 @@ func main() {
 
 	// Load configuration from environment
 	config := Config{
-		GitHubPAT:      os.Getenv("GITHUB_PAT"),
-		GitHubOrg:      os.Getenv("GITHUB_ORG"),
-		GitHubRepo:     os.Getenv("GITHUB_REPO"),
-		WebhookSecret:  os.Getenv("WEBHOOK_SECRET"),
-		Port:           getEnvOrDefault("PORT", "8080"),
-		PoolSize:       4, // Default pool size
-		TemplatePath:   getEnvOrDefault("VM_TEMPLATE_PATH", defaultTemplatePath),
-		VMStoragePath:  getEnvOrDefault("VM_STORAGE_PATH", defaultStoragePath),
-		OrchestratorIP: getEnvOrDefault("ORCHESTRATOR_IP", "localhost"),
+		GitHubPAT:     os.Getenv("GITHUB_PAT"),
+		GitHubOrg:     os.Getenv("GITHUB_ORG"),
+		GitHubRepo:    os.Getenv("GITHUB_REPO"),
+		PoolSize:      4, // Default pool size
+		TemplatePath:  getEnvOrDefault("VM_TEMPLATE_PATH", defaultTemplatePath),
+		VMStoragePath: getEnvOrDefault("VM_STORAGE_PATH", defaultStoragePath),
 	}
 
 	logger.Info("Using template path", "path", config.TemplatePath)
@@ -657,16 +607,12 @@ func main() {
 			config.GitHubOrg = "mock-org"
 			logger.Debug("Using mock GitHub organization")
 		}
-		if config.WebhookSecret == "" {
-			config.WebhookSecret = "mock-secret"
-			logger.Debug("Using mock webhook secret")
-		}
 	} else {
 		logger.Info("Using Hyper-V VM Manager (production mode)")
 
 		// Validate required configuration for production mode
-		if config.GitHubPAT == "" || config.GitHubOrg == "" || config.WebhookSecret == "" {
-			logger.Error("Missing required environment variables: GITHUB_PAT, GITHUB_ORG, WEBHOOK_SECRET")
+		if config.GitHubPAT == "" || config.GitHubOrg == "" {
+			logger.Error("Missing required environment variables: GITHUB_PAT, GITHUB_ORG")
 			os.Exit(1)
 		}
 
@@ -682,20 +628,9 @@ func main() {
 		os.Exit(1)
 	}
 
-	// Setup HTTP router
-	router := mux.NewRouter()
-	router.HandleFunc("/webhook", orchestrator.webhookHandler).Methods("POST")
-	router.HandleFunc("/api/runner-config/{vmName}", orchestrator.runnerConfigHandler).Methods("GET")
-	router.HandleFunc("/api/runner-complete/{vmName}", orchestrator.runnerCompleteHandler).Methods("POST")
-	router.HandleFunc("/health", orchestrator.healthHandler).Methods("GET")
-
-	// Start HTTP server
-	addr := fmt.Sprintf(":%s", config.Port)
-	logger.Info("Orchestrator listening", "port", config.Port)
-	if err := http.ListenAndServe(addr, router); err != nil {
-		logger.Error("HTTP server failed", "error", err)
-		os.Exit(1)
-	}
+	// Keep the orchestrator running
+	logger.Info("Orchestrator running, monitoring VMs for job completion")
+	select {} // Block forever while monitoring goroutines run
 }
 
 // getEnvOrDefault returns environment variable value or default

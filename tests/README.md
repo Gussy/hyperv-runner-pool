@@ -1,76 +1,96 @@
-# API Tests
+# Tests
 
-This directory contains Hurl test files for the Hyper-V Runner Pool API endpoints.
+This directory previously contained Hurl-based API tests for HTTP endpoints. With the migration to a serverless polling architecture, those tests have been removed.
 
-## Prerequisites
+## Current Testing Approach
 
-- [Hurl](https://hurl.dev/) must be installed
-- The server must be running in mock mode
-
-## Test Files
-
-- `health.hurl` - Tests the `/health` endpoint
-- `webhook.hurl` - Tests the `/webhook` endpoint with signature verification
-- `runner-config.hurl` - Tests the `/api/runner-config/{vmName}` endpoint
-- `runner-complete.hurl` - Tests the `/api/runner-complete/{vmName}` endpoint
+The project now uses **Go unit tests** exclusively, located in `main_test.go` at the repository root.
 
 ## Running Tests
 
 ### Option 1: Using Task (Recommended)
 
 ```bash
-# Start the server in one terminal
-task run
+# Run all unit tests
+task test
 
-# Run API tests in another terminal
-task test-api
-
-# Or run all tests (unit + API)
+# Run all tests (same as above)
 task test-all
+
+# Run quick tests only
+task test-short
 ```
 
 ### Option 2: Manual
 
 ```bash
-# Start the server with mock VMs in one terminal
-USE_MOCK=true go run main.go
+# Run all tests with verbose output
+go test -v ./...
 
-# Run hurl tests in another terminal
-hurl --test tests/*.hurl
+# Run tests with coverage
+go test -v -cover ./...
 
-# Or run individual test files
-hurl --test tests/health.hurl
-hurl --test tests/webhook.hurl
-hurl --test tests/runner-config.hurl
-hurl --test tests/runner-complete.hurl
+# Run specific test
+go test -v -run TestMockVMManager_CreateVM
 ```
 
 ## Test Coverage
 
-### Health Endpoint (`/health`)
-- ✅ Returns 200 OK
-- ✅ Returns valid JSON structure
-- ✅ Reports VM pool status
+### Mock VM Manager
+- ✅ CreateVM - Simulates VM creation
+- ✅ DestroyVM - Simulates VM destruction
+- ✅ GetVMState - Returns VM power state
+- ✅ InjectConfig - Simulates config injection into VHDX
+- ✅ RunPowerShell - Mocks PowerShell command execution
 
-### Webhook Endpoint (`/webhook`)
-- ✅ Rejects requests without signature (401)
-- ✅ Rejects requests with invalid signature (401)
-- ✅ Accepts requests with valid HMAC-SHA256 signature (200)
-- ✅ Handles workflow job events
+### Orchestrator
+- ✅ NewOrchestrator - Creates orchestrator instance
+- ✅ RecreateVM - VM recreation flow
+- ✅ VMSlot state transitions - Mutex-protected state changes
+- ✅ Pool initialization - Concurrent VM creation
 
-### Runner Config Endpoint (`/api/runner-config/{vmName}`)
-- ✅ Returns 404 for non-existent VM
-- ✅ Returns configuration for valid VMs (runner-1 through runner-4)
-- ✅ Returns proper JSON structure with token, organization, repository, name, labels
+### Runner Configuration
+- ✅ JSON serialization/deserialization
+- ✅ Config structure validation
 
-### Runner Complete Endpoint (`/api/runner-complete/{vmName}`)
-- ✅ Accepts completion notifications (200 OK)
-- ✅ Handles all valid VMs
-- ✅ Gracefully handles non-existent VMs
+### Concurrent Operations
+- ✅ Concurrent VM creation (10 VMs in parallel)
+- ✅ Concurrent VM destruction
+- ✅ Thread safety verification
+
+### Utility Functions
+- ✅ getEnvOrDefault - Environment variable handling
+
+## Test Organization
+
+Tests are organized into logical sections:
+
+1. **Mock VM Manager Tests** - Test the mock implementation used for development
+2. **Orchestrator Tests** - Test pool management and VM lifecycle
+3. **RunnerConfig Tests** - Test configuration serialization
+4. **Utility Function Tests** - Test helper functions
+5. **Concurrent Operations Tests** - Test thread safety
+
+## Development Workflow
+
+```bash
+# 1. Make code changes
+vim main.go
+
+# 2. Run tests
+task test
+
+# 3. If tests pass, run with mock VMs
+task run
+
+# 4. Build for production
+task build
+```
 
 ## Notes
 
-- All tests run against `http://localhost:8080` by default
-- Tests expect the server to be running in mock mode (`USE_MOCK=true`)
-- Webhook tests use the mock secret: `mock-secret`
-- Signatures in webhook tests are pre-computed HMAC-SHA256 values
+- All tests run against the mock VM manager (no actual VMs required)
+- Tests are fast (~10 seconds total)
+- No external dependencies needed (no Hurl, no running server)
+- Tests verify core logic, state management, and concurrency safety
+- Production Hyper-V operations are tested manually on Windows
