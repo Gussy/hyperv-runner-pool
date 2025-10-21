@@ -20,7 +20,10 @@ coverage.html
 
 # IDE
 .vscode/
-.idea/
+.idea/*.local.*
+
+# AI Coding Tools
+.claude/
 
 # Build artifacts
 dist/
