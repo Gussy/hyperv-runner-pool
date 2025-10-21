@@ -33,7 +33,16 @@ build/
 output-*/
 output-windows-runner/
 output-windows-runner-enhanced/
+output-runner-basic/
+output-runner-enhanced/
 packer_cache/
+packer/output-*/
+packer/hyperv*/
+
+# Packer build artifacts
+packer/autounattend.iso
+packer/packer-*.log
+packer/.packer-cache/
 
 # VM images and templates
 *.vhdx

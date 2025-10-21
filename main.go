@@ -129,7 +129,10 @@ func (h *HyperVManager) CreateVM(slot *VMSlot) error {
 		Set-VM -Name "%s" -ProcessorCount 2
 		Set-VM -Name "%s" -AutomaticStartAction Nothing
 		Set-VM -Name "%s" -AutomaticStopAction ShutDown
-	`, vmName, vhdxPath, vmName, vmName, vmName)
+		Add-VMNetworkAdapter -VMName "%s" -SwitchName "Default Switch"
+		$vmDrive = Get-VMHardDiskDrive -VMName "%s"
+		Set-VMFirmware -VMName "%s" -BootOrder $vmDrive
+	`, vmName, vhdxPath, vmName, vmName, vmName, vmName, vmName, vmName)
 
 	if _, err := h.RunPowerShell(createCmd); err != nil {
 		return fmt.Errorf("failed to create VM: %w", err)
