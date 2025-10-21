@@ -18,9 +18,9 @@ A production-ready pool manager for running GitHub Actions workflows in ephemera
 ```
 ┌─────────────────────────────────────────────────────────────┐
 │                         GitHub                              │
-│  ┌──────────────┐                                            │
+│  ┌──────────────┐                                           │
 │  │  Repository  │ ◄────── Runners register & pull jobs      │
-│  └──────────────┘                                            │
+│  └──────────────┘                                           │
 └─────────────────────────────────────────────────────────────┘
                                    ▲
                                    │
