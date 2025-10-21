@@ -4,31 +4,85 @@ silent: true
 
 tasks:
   init:
-    desc: Initialize Packer plugins
+    desc: Initialize Packer plugins and hv-packer submodule
     dir: '{{.TASKFILE_DIR}}'
     cmds:
-      - packer init .
-
-  build:basic:
-    desc: Build basic Windows runner image
-    dir: '{{.TASKFILE_DIR}}'
-    cmds:
-      - packer build -var-file="windows-runner.pkrvars.hcl" -only="hyperv-iso.windows-runner" .
-
-  build:enhanced:
-    desc: Build enhanced Windows runner image with all tools
-    dir: '{{.TASKFILE_DIR}}'
-    cmds:
-      - packer build -var-file="windows-runner-enhanced.pkrvars.hcl" -only="hyperv-iso.windows-runner-enhanced" .
+      - powershell -Command "Write-Host 'Initializing hv-packer submodule...' -ForegroundColor Cyan"
+      - git submodule update --init --recursive
+      - powershell -Command "Write-Host 'Initializing Packer plugins...' -ForegroundColor Cyan"
+      - packer init runner-customizations
+      - powershell -Command "Write-Host 'Packer plugins initialized' -ForegroundColor Green"
 
   validate:basic:
-    desc: Validate basic Windows runner configuration
+    desc: Validate basic runner configuration
     dir: '{{.TASKFILE_DIR}}'
     cmds:
-      - packer validate -var-file="windows-runner.pkrvars.hcl" .
+      - powershell -File build-runner.ps1 -BuildType basic -ValidateOnly
 
   validate:enhanced:
-    desc: Validate enhanced Windows runner configuration
+    desc: Validate enhanced runner configuration
     dir: '{{.TASKFILE_DIR}}'
     cmds:
-      - packer validate -var-file="windows-runner-enhanced.pkrvars.hcl" .
+      - powershell -File build-runner.ps1 -BuildType enhanced -ValidateOnly
+
+  build:basic:
+    desc: Build basic GitHub Actions runner image
+    dir: '{{.TASKFILE_DIR}}'
+    cmds:
+      - powershell -File build-runner.ps1 -BuildType basic
+
+  build:basic:debug:
+    desc: Build basic runner with debug logging enabled
+    dir: '{{.TASKFILE_DIR}}'
+    cmds:
+      - powershell -File build-runner.ps1 -BuildType basic -EnableLogging
+
+  build:enhanced:
+    desc: Build enhanced GitHub Actions runner image with full toolchain
+    dir: '{{.TASKFILE_DIR}}'
+    cmds:
+      - powershell -File build-runner.ps1 -BuildType enhanced
+
+  build:enhanced:debug:
+    desc: Build enhanced runner with debug logging enabled
+    dir: '{{.TASKFILE_DIR}}'
+    cmds:
+      - powershell -File build-runner.ps1 -BuildType enhanced -EnableLogging
+
+  clean:
+    desc: Clean up build artifacts
+    dir: '{{.TASKFILE_DIR}}'
+    cmds:
+      - powershell -Command "Write-Host 'Cleaning build artifacts...' -ForegroundColor Yellow"
+      - powershell -Command "if (Test-Path 'output-runner-basic') { Remove-Item -Path 'output-runner-basic' -Recurse -Force }"
+      - powershell -Command "if (Test-Path 'output-runner-enhanced') { Remove-Item -Path 'output-runner-enhanced' -Recurse -Force }"
+      - powershell -Command "Remove-Item -Path 'packer-*.log' -ErrorAction SilentlyContinue"
+      - powershell -Command "Write-Host 'Clean complete' -ForegroundColor Green"
+
+  info:
+    desc: Display information about available builds
+    dir: '{{.TASKFILE_DIR}}'
+    cmds:
+      - |
+        powershell -Command "Write-Host '========================================' -ForegroundColor Cyan"
+        powershell -Command "Write-Host 'GitHub Actions Runner Builds' -ForegroundColor Cyan"
+        powershell -Command "Write-Host '========================================' -ForegroundColor Cyan"
+        powershell -Command "Write-Host ''"
+        powershell -Command "Write-Host 'Available Build Types:' -ForegroundColor Yellow"
+        powershell -Command "Write-Host ''"
+        powershell -Command "Write-Host '  basic     - Minimal tooling (Git, Node.js, Python, .NET)' -ForegroundColor White"
+        powershell -Command "Write-Host '              Build time: ~1.5-2 hours'"
+        powershell -Command "Write-Host '              Disk size: ~40GB'"
+        powershell -Command "Write-Host ''"
+        powershell -Command "Write-Host '  enhanced  - Full development stack (VS Build Tools, multiple' -ForegroundColor White"
+        powershell -Command "Write-Host '              language versions, cloud CLIs, containers, etc.)'"
+        powershell -Command "Write-Host '              Build time: ~3-4 hours'"
+        powershell -Command "Write-Host '              Disk size: ~80GB'"
+        powershell -Command "Write-Host ''"
+        powershell -Command "Write-Host 'Quick Start:' -ForegroundColor Yellow"
+        powershell -Command "Write-Host '  1. task init              # Initialize submodule and plugins'"
+        powershell -Command "Write-Host '  2. task validate:basic    # Validate configuration'"
+        powershell -Command "Write-Host '  3. task build:basic       # Build the image'"
+        powershell -Command "Write-Host ''"
+        powershell -Command "Write-Host 'Based on: https://github.com/marcinbojko/hv-packer' -ForegroundColor Gray"
+        powershell -Command "Write-Host ''"

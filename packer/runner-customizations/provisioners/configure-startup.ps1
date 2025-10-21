@@ -107,7 +107,8 @@ Write-Host "Scheduled task 'GitHubActionsRunner' created successfully"
 $task = Get-ScheduledTask -TaskName "GitHubActionsRunner" -ErrorAction SilentlyContinue
 if ($task) {
     Write-Host "Scheduled task verified: $($task.TaskName) - State: $($task.State)"
-} else {
+}
+else {
     Write-Error "Failed to create scheduled task"
     exit 1
 }
