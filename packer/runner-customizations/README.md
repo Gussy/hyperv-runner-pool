@@ -105,6 +105,10 @@ iso_url = "https://..."
 iso_checksum = "sha256:..."
 ```
 
+## Distribution
+
+After building your runner images, you can upload them to GitHub Container Registry (ghcr.io) for storage and distribution. See [UPLOAD_TO_GHCR.md](UPLOAD_TO_GHCR.md) for detailed instructions on using ORAS to push and pull VHDX images.
+
 ## Quick Reference
 
 | Task | Command |
