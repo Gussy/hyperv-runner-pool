@@ -94,22 +94,42 @@ Write-Host "Startup script created at: $startupScriptPath"
 
 # Create scheduled task to run startup script on boot
 Write-Host "Creating scheduled task for startup..."
-$action = New-ScheduledTaskAction -Execute "powershell.exe" -Argument "-ExecutionPolicy Bypass -File `"$startupScriptPath`""
-$trigger = New-ScheduledTaskTrigger -AtStartup
-$principal = New-ScheduledTaskPrincipal -UserId "SYSTEM" -LogonType ServiceAccount -RunLevel Highest
-$settings = New-ScheduledTaskSettingsSet -AllowStartIfOnBatteries -DontStopIfGoingOnBatteries -StartWhenAvailable
+try {
+    $action = New-ScheduledTaskAction -Execute "powershell.exe" -Argument "-ExecutionPolicy Bypass -File `"$startupScriptPath`""
+    $trigger = New-ScheduledTaskTrigger -AtStartup
+    $principal = New-ScheduledTaskPrincipal -UserId "SYSTEM" -LogonType ServiceAccount -RunLevel Highest
+    $settings = New-ScheduledTaskSettingsSet -AllowStartIfOnBatteries -DontStopIfGoingOnBatteries -StartWhenAvailable
 
-Register-ScheduledTask -TaskName "GitHubActionsRunner" -Action $action -Trigger $trigger -Principal $principal -Settings $settings -Force
+    # Unregister existing task if it exists
+    $existingTask = Get-ScheduledTask -TaskName "GitHubActionsRunner" -ErrorAction SilentlyContinue
+    if ($existingTask) {
+        Write-Host "Removing existing scheduled task..."
+        Unregister-ScheduledTask -TaskName "GitHubActionsRunner" -Confirm:$false
+    }
 
-Write-Host "Scheduled task 'GitHubActionsRunner' created successfully"
+    # Register the new task
+    $task = Register-ScheduledTask -TaskName "GitHubActionsRunner" -Action $action -Trigger $trigger -Principal $principal -Settings $settings -Force
+    Write-Host "Scheduled task 'GitHubActionsRunner' created successfully"
 
-# Verify scheduled task
-$task = Get-ScheduledTask -TaskName "GitHubActionsRunner" -ErrorAction SilentlyContinue
-if ($task) {
-    Write-Host "Scheduled task verified: $($task.TaskName) - State: $($task.State)"
-}
-else {
-    Write-Error "Failed to create scheduled task"
+    # Disable the task initially (will be enabled on first boot by the orchestrator)
+    Write-Host "Disabling scheduled task (will be enabled on VM deployment)..."
+    try {
+        Disable-ScheduledTask -TaskName "GitHubActionsRunner" -ErrorAction Stop
+        Write-Host "Scheduled task disabled successfully"
+    } catch {
+        Write-Warning "Failed to disable scheduled task: $_"
+        # This is not critical, continue
+    }
+
+    # Verify scheduled task
+    $task = Get-ScheduledTask -TaskName "GitHubActionsRunner" -ErrorAction SilentlyContinue
+    if ($task) {
+        Write-Host "Scheduled task verified: $($task.TaskName) - State: $($task.State)"
+    } else {
+        throw "Scheduled task verification failed"
+    }
+} catch {
+    Write-Error "Failed to create scheduled task: $_"
     exit 1
 }
 

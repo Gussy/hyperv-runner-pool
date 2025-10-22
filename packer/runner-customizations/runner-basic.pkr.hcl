@@ -98,18 +98,6 @@ build {
     script            = "./runner-customizations/provisioners/configure-startup.ps1"
   }
 
-  # Phase 5d: Compression and cleanup (from hv-packer)
-  provisioner "powershell" {
-    elevated_password = local.elevated_password
-    elevated_user     = local.elevated_user
-    script            = "./hv-packer/extra/scripts/windows/shared/phase-5d.windows-compress.ps1"
-  }
-
-  # Restart after cleanup to ensure WinRM is stable
-  provisioner "windows-restart" {
-    restart_timeout = "30m"
-  }
-
   # Sysprep configuration
   provisioner "file" {
     destination = "C:\\Windows\\System32\\Sysprep\\unattend.xml"

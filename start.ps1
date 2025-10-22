@@ -33,7 +33,13 @@ Get-Content ".env" | ForEach-Object {
         $name = $matches[1].Trim()
         $value = $matches[2].Trim()
         [Environment]::SetEnvironmentVariable($name, $value, "Process")
-        Write-Host "  $name = $value" -ForegroundColor Gray
+
+        # Censor sensitive values
+        $displayValue = $value
+        if ($name -eq 'GITHUB_PAT' -and $value.Length -gt 6) {
+            $displayValue = $value.Substring(0, 12) + "********"
+        }
+        Write-Host "  $name = $displayValue" -ForegroundColor Gray
     }
 }
 
@@ -82,10 +88,12 @@ try {
         Write-Host "  Please enable it with:"
         Write-Host "    Enable-WindowsOptionalFeature -Online -FeatureName Microsoft-Hyper-V -All"
         Write-Host "    (Reboot required after enabling)"
-    } else {
+    }
+    else {
         Write-Host "  Hyper-V is enabled" -ForegroundColor Green
     }
-} catch {
+}
+catch {
     Write-Host "  WARNING: Could not check Hyper-V status: $_" -ForegroundColor Yellow
 }
 
