@@ -21,11 +21,11 @@ packer/
 │   ├── templates/                      # Base Packer templates
 │   ├── extra/scripts/windows/shared/   # Phase 1-5 provisioning scripts
 │   └── variables/                      # Windows Server configurations
-├── runner-customizations/              # Our GitHub Actions runner extensions
-│   ├── provisioners/                   # Runner installation scripts
-│   │   ├── install-runner.ps1
-│   │   ├── configure-startup.ps1
+├── runner-customizations/              # Our toolchain customizations
+│   ├── provisioners/                   # Tool installation scripts
+│   │   ├── install-basic-tools.ps1
 │   │   └── install-enhanced-tools.ps1
+│   │   # Note: Runner is now installed at runtime by the orchestrator
 │   ├── variables/                      # Runner build configurations
 │   │   ├── runner-basic.pkvars.hcl
 │   │   └── runner-enhanced.pkvars.hcl
@@ -117,14 +117,13 @@ The base hv-packer templates handle:
 5. **Phase 5d**: Disk compression and optimization
 6. **Sysprep**: Generalization for template reuse
 
-### Our Runner Customizations
+### Our Customizations
 
 On top of hv-packer's foundation, we add:
 
-1. **Development tools**: Language runtimes and build tools
-2. **GitHub Actions Runner**: Pre-installed but unconfigured
-3. **Startup automation**: Scripts for runner registration on first boot
-4. **Runner-specific optimizations**: Paths, permissions, service configuration
+1. **Development tools**: Language runtimes and build tools (basic or enhanced)
+
+**Note:** GitHub Actions Runner is no longer pre-installed in the template. The orchestrator downloads and configures it at runtime when VMs are created. This allows using the latest runner version without rebuilding templates.
 
 ## Configuration
 

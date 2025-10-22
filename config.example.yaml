@@ -31,6 +31,16 @@ hyperv:
   # If not specified, defaults to: <current-directory>\vms\storage
   storage_path: ""
 
+  # PowerShell Direct credentials for connecting to VMs
+  # These should match the user account created in your Packer template
+  # This project's Packer templates use:
+  #   Username: Administrator
+  #   Password: password
+  # These are used for headless script injection via PowerShell Direct (Hyper-V feature)
+  # If not specified, defaults to Administrator/password
+  vm_username: "Administrator"
+  vm_password: "password"
+
 # Debug Configuration
 debug:
   # Use mock VM manager for macOS/Linux development (true/false)

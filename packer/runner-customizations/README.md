@@ -62,9 +62,9 @@ runner-customizations/
 │   ├── runner-basic.pkvars.hcl    # Basic build configuration
 │   └── runner-enhanced.pkvars.hcl # Enhanced build configuration
 └── provisioners/
-    ├── install-runner.ps1          # GitHub Actions runner installation
-    ├── configure-startup.ps1       # Runner startup configuration
+    ├── install-basic-tools.ps1     # Basic toolchain installation
     └── install-enhanced-tools.ps1  # Enhanced toolchain installation
+    # Note: Runner installation is now done at runtime by the orchestrator
 ```
 
 ## Build Process
@@ -74,11 +74,10 @@ Both images follow the same provisioning flow:
 1. **hv-packer Phase 1**: Initial system configuration
 2. **hv-packer Phase 2**: System setup and tuning
 3. **Windows Updates**: Two-pass update cycle
-4. **hv-packer Phase 5a**: Base software (Chocolatey, PowerShell modules)
-5. **Custom Tools**: Install development tools (basic or enhanced)
-6. **GitHub Runner**: Install and configure GitHub Actions runner
-7. **hv-packer Phase 5d**: Disk compression and optimization
-8. **Sysprep**: Generalize for template reuse
+4. **Custom Tools**: Install development tools (basic or enhanced)
+5. **Sysprep**: Generalize for template reuse
+
+**Note:** GitHub Actions Runner is no longer installed during the Packer build. It's downloaded and configured at runtime by the orchestrator when VMs are created. This makes templates more generic and allows using the latest runner version without rebuilding.
 
 ## Customization
 

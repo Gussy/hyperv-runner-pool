@@ -84,19 +84,6 @@ build {
     script            = "./runner-customizations/provisioners/install-basic-tools.ps1"
   }
 
-  # CUSTOM: Install GitHub Actions Runner
-  provisioner "powershell" {
-    elevated_password = local.elevated_password
-    elevated_user     = local.elevated_user
-    script            = "./runner-customizations/provisioners/install-runner.ps1"
-  }
-
-  # CUSTOM: Configure startup script
-  provisioner "powershell" {
-    elevated_password = local.elevated_password
-    elevated_user     = local.elevated_user
-    script            = "./runner-customizations/provisioners/configure-startup.ps1"
-  }
 
   # Sysprep configuration
   provisioner "file" {

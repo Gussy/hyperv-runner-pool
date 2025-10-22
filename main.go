@@ -2,6 +2,7 @@ package main
 
 import (
 	"context"
+	_ "embed"
 	"encoding/json"
 	"fmt"
 	"io"
@@ -18,6 +19,9 @@ import (
 	"github.com/urfave/cli/v3"
 	"gopkg.in/yaml.v3"
 )
+
+//go:embed scripts/configure-runner.ps1
+var configureRunnerScript string
 
 // Version information (set by GoReleaser during build)
 var (
@@ -55,6 +59,8 @@ type RunnersConfig struct {
 type HyperVConfig struct {
 	TemplatePath  string `yaml:"template_path"`
 	VMStoragePath string `yaml:"storage_path"`
+	VMUsername    string `yaml:"vm_username"` // PowerShell Direct credentials
+	VMPassword    string `yaml:"vm_password"` // PowerShell Direct credentials
 }
 
 // DebugConfig holds debugging and logging configuration
@@ -176,7 +182,15 @@ func (h *HyperVManager) CreateVM(slot *VMSlot) error {
 	}
 
 	h.logger.Info("VM created and started successfully", "vm_name", vmName)
-	h.logger.Info("Scheduled task should start automatically on boot", "vm_name", vmName)
+	h.logger.Info("Waiting for VM to boot and configuring runner...", "vm_name", vmName)
+
+	// Execute the embedded configure-runner script in the VM
+	// This will set up the scheduled task and start the runner
+	if err := h.ExecuteScriptInVM(vmName, configureRunnerScript); err != nil {
+		return fmt.Errorf("failed to configure runner in VM: %w", err)
+	}
+
+	h.logger.Info("Runner configured successfully in VM", "vm_name", vmName)
 
 	return nil
 }
@@ -355,6 +369,94 @@ func (h *HyperVManager) InjectConfig(vhdxPath string, config RunnerConfig) error
 		"destination", destPath,
 		"config_size", len(configJSON))
 
+	return nil
+}
+
+// ExecuteScriptInVM executes a PowerShell script inside a running VM using PowerShell Direct
+// This method uses stored credentials to avoid interactive prompts
+func (h *HyperVManager) ExecuteScriptInVM(vmName string, scriptContent string) error {
+	h.logger.Info("Executing script in VM via PowerShell Direct", "vm_name", vmName)
+
+	// Escape single quotes and backticks in the script content
+	escapedScript := strings.ReplaceAll(scriptContent, "'", "''")
+
+	// Create credentials securely using PowerShell
+	execCmd := fmt.Sprintf(`
+		$ErrorActionPreference = "Stop"
+		$vmName = "%s"
+		$username = "%s"
+		$password = "%s"
+
+		# Create credential object
+		$securePassword = ConvertTo-SecureString $password -AsPlainText -Force
+		$credential = New-Object System.Management.Automation.PSCredential ($username, $securePassword)
+
+		# The script to execute in the VM
+		$scriptContent = @'
+%s
+'@
+
+		# Execute script in VM with retries
+		$maxRetries = 10
+		$retryCount = 0
+		$retryDelay = 10
+
+		while ($retryCount -lt $maxRetries) {
+			try {
+				Write-Output "Attempt $($retryCount + 1) of $maxRetries to connect to VM..."
+
+				# Execute the script in the VM
+				$result = Invoke-Command -VMName $vmName -Credential $credential -ScriptBlock {
+					param($script)
+
+					# Write script to temp file and execute it
+					$tempScript = "$env:TEMP\configure-runner-$([guid]::NewGuid()).ps1"
+					Set-Content -Path $tempScript -Value $script -Force
+
+					try {
+						& powershell.exe -ExecutionPolicy Bypass -NoProfile -File $tempScript 2>&1
+						$exitCode = $LASTEXITCODE
+						Remove-Item $tempScript -Force -ErrorAction SilentlyContinue
+
+						if ($exitCode -ne 0) {
+							throw "Script exited with code $exitCode"
+						}
+					} catch {
+						Remove-Item $tempScript -Force -ErrorAction SilentlyContinue
+						throw
+					}
+				} -ArgumentList $scriptContent
+
+				# Output the result
+				$result | ForEach-Object { Write-Output $_ }
+
+				Write-Output "SCRIPT_EXECUTION_SUCCESS"
+				break
+			} catch {
+				$retryCount++
+				if ($retryCount -lt $maxRetries) {
+					Write-Output "Connection failed: $_"
+					Write-Output "Waiting $retryDelay seconds before retry..."
+					Start-Sleep -Seconds $retryDelay
+				} else {
+					throw "Failed to execute script after $maxRetries attempts: $_"
+				}
+			}
+		}
+	`, vmName, h.config.HyperV.VMUsername, h.config.HyperV.VMPassword, escapedScript)
+
+	output, err := h.RunPowerShell(execCmd)
+	if err != nil {
+		return fmt.Errorf("failed to execute script in VM: %w", err)
+	}
+
+	h.logger.Debug("Script execution output", "output", output)
+
+	if !strings.Contains(output, "SCRIPT_EXECUTION_SUCCESS") {
+		return fmt.Errorf("script execution did not complete successfully: %s", output)
+	}
+
+	h.logger.Info("Script executed successfully in VM", "vm_name", vmName)
 	return nil
 }
 
@@ -860,6 +962,12 @@ func loadConfigFromFile(path string) (*Config, error) {
 	}
 	if config.Runners.NamePrefix == "" {
 		config.Runners.NamePrefix = "runner-"
+	}
+	if config.HyperV.VMUsername == "" {
+		config.HyperV.VMUsername = "vagrant"
+	}
+	if config.HyperV.VMPassword == "" {
+		config.HyperV.VMPassword = "vagrant"
 	}
 	if config.Debug.LogLevel == "" {
 		config.Debug.LogLevel = "info"
