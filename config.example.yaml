@@ -1,0 +1,45 @@
+# GitHub Configuration
+github:
+  # Personal Access Token for GitHub API access
+  # For repository runners: requires 'repo' scope
+  # For organization runners: requires 'admin:org' -> 'manage_runners:org' scope
+  token: ghp_xxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxx
+
+  # GitHub Organization name
+  org: your-organization
+
+  # GitHub Repository name (leave empty for organization-level runners)
+  repo: your-repository
+
+# Runner Pool Configuration
+runners:
+  # Number of VMs to maintain in the warm pool
+  pool_size: 1
+
+  # Name prefix for VMs and runners
+  # VMs will be named as: <name_prefix>1, <name_prefix>2, etc.
+  # If not specified, defaults to: "runner-"
+  name_prefix: "runner-"
+
+# Hyper-V Configuration
+hyperv:
+  # Path to the VM template VHDX file
+  # If not specified, defaults to: <current-directory>\vms\templates\runner-template.vhdx
+  template_path: ""
+
+  # Path to store VM VHDX files
+  # If not specified, defaults to: <current-directory>\vms\storage
+  storage_path: ""
+
+# Debug Configuration
+debug:
+  # Use mock VM manager for macOS/Linux development (true/false)
+  # Set to true for testing on non-Windows platforms, false for production on Windows
+  use_mock: false
+
+  # Log level: debug, info, warn, error
+  log_level: info
+
+  # Log format: text, json
+  # Use 'json' for structured logging in production
+  log_format: text

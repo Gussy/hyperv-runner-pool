@@ -1,6 +1,7 @@
 package main
 
 import (
+	"context"
 	"encoding/json"
 	"fmt"
 	"io"
@@ -8,9 +9,14 @@ import (
 	"net/http"
 	"os"
 	"os/exec"
+	"os/signal"
 	"strings"
 	"sync"
+	"syscall"
 	"time"
+
+	"github.com/urfave/cli/v3"
+	"gopkg.in/yaml.v3"
 )
 
 // Version information (set by GoReleaser during build)
@@ -26,12 +32,36 @@ var (
 
 // Config holds the application configuration
 type Config struct {
-	GitHubPAT     string
-	GitHubOrg     string
-	GitHubRepo    string
-	PoolSize      int
-	TemplatePath  string
-	VMStoragePath string
+	GitHub  GitHubConfig  `yaml:"github"`
+	Runners RunnersConfig `yaml:"runners"`
+	HyperV  HyperVConfig  `yaml:"hyperv"`
+	Debug   DebugConfig   `yaml:"debug"`
+}
+
+// GitHubConfig holds GitHub-specific configuration
+type GitHubConfig struct {
+	Token string `yaml:"token"`
+	Org   string `yaml:"org"`
+	Repo  string `yaml:"repo"`
+}
+
+// RunnersConfig holds runner pool configuration
+type RunnersConfig struct {
+	PoolSize   int    `yaml:"pool_size"`
+	NamePrefix string `yaml:"name_prefix"`
+}
+
+// HyperVConfig holds Hyper-V specific configuration
+type HyperVConfig struct {
+	TemplatePath  string `yaml:"template_path"`
+	VMStoragePath string `yaml:"storage_path"`
+}
+
+// DebugConfig holds debugging and logging configuration
+type DebugConfig struct {
+	UseMock   bool   `yaml:"use_mock"`
+	LogLevel  string `yaml:"log_level"`
+	LogFormat string `yaml:"log_format"`
 }
 
 // RunnerConfig is the configuration sent to VMs for runner registration
@@ -75,6 +105,7 @@ type VMManager interface {
 	GetVMState(vmName string) (string, error)
 	InjectConfig(vhdxPath string, config RunnerConfig) error
 	RunPowerShell(command string) (string, error)
+	CleanupLeftoverResources(namePrefix string) error
 }
 
 // ========================================
@@ -98,12 +129,12 @@ func NewHyperVManager(config Config, logger *slog.Logger) *HyperVManager {
 // CreateVM creates a new Hyper-V VM from the template
 func (h *HyperVManager) CreateVM(slot *VMSlot) error {
 	vmName := slot.Name
-	vhdxPath := fmt.Sprintf("%s\\%s.vhdx", h.config.VMStoragePath, vmName)
+	vhdxPath := fmt.Sprintf("%s\\%s.vhdx", h.config.HyperV.VMStoragePath, vmName)
 
 	// Copy template VHDX to VM storage
 	copyCmd := fmt.Sprintf(
 		`Copy-Item -Path "%s" -Destination "%s" -Force`,
-		h.config.TemplatePath,
+		h.config.HyperV.TemplatePath,
 		vhdxPath,
 	)
 	if _, err := h.RunPowerShell(copyCmd); err != nil {
@@ -113,8 +144,8 @@ func (h *HyperVManager) CreateVM(slot *VMSlot) error {
 	// Inject runner config into VHDX (before creating VM)
 	runnerConfig := RunnerConfig{
 		Token:        slot.RunnerToken,
-		Organization: h.config.GitHubOrg,
-		Repository:   h.config.GitHubRepo,
+		Organization: h.config.GitHub.Org,
+		Repository:   h.config.GitHub.Repo,
 		Name:         vmName,
 		Labels:       "self-hosted,Windows,X64,ephemeral",
 	}
@@ -145,6 +176,8 @@ func (h *HyperVManager) CreateVM(slot *VMSlot) error {
 	}
 
 	h.logger.Info("VM created and started successfully", "vm_name", vmName)
+	h.logger.Info("Scheduled task should start automatically on boot", "vm_name", vmName)
+
 	return nil
 }
 
@@ -163,7 +196,7 @@ func (h *HyperVManager) DestroyVM(slot *VMSlot) error {
 	}
 
 	// Delete VHDX file
-	vhdxPath := fmt.Sprintf("%s\\%s.vhdx", h.config.VMStoragePath, vmName)
+	vhdxPath := fmt.Sprintf("%s\\%s.vhdx", h.config.HyperV.VMStoragePath, vmName)
 	deleteCmd := fmt.Sprintf(`Remove-Item -Path "%s" -Force -ErrorAction SilentlyContinue`, vhdxPath)
 	_, _ = h.RunPowerShell(deleteCmd) // Ignore errors if file already deleted
 
@@ -183,25 +216,79 @@ func (h *HyperVManager) GetVMState(vmName string) (string, error) {
 
 // InjectConfig mounts the VHDX, writes runner config, then unmounts
 func (h *HyperVManager) InjectConfig(vhdxPath string, config RunnerConfig) error {
-	// Mount the VHDX
+	h.logger.Debug("Starting config injection", "vhdx_path", vhdxPath)
+
+	// Mount the VHDX with detailed partition information
 	mountCmd := fmt.Sprintf(`
+		$ErrorActionPreference = "Stop"
 		$disk = Mount-VHD -Path "%s" -Passthru
-		$partition = Get-Partition -DiskNumber $disk.Number | Where-Object {$_.Type -eq 'Basic'}
+		$diskNumber = $disk.Number
+		Write-Output "DiskNumber: $diskNumber"
+
+		# Get all partitions to see what's available
+		$partitions = Get-Partition -DiskNumber $diskNumber
+		Write-Output "Partitions found: $($partitions.Count)"
+		$partitions | ForEach-Object {
+			Write-Output "  Partition $($_.PartitionNumber): Type=$($_.Type), Size=$($_.Size), DriveLetter=$($_.DriveLetter)"
+		}
+
+		# Try to find the main Windows partition
+		# It should be the largest Basic partition, or the one with a drive letter
+		$partition = $partitions | Where-Object { $_.Type -eq 'Basic' -and $_.DriveLetter } | Select-Object -First 1
+
+		if (-not $partition) {
+			# If no partition with drive letter, try to assign one to the largest Basic partition
+			$partition = $partitions | Where-Object { $_.Type -eq 'Basic' } | Sort-Object Size -Descending | Select-Object -First 1
+			if ($partition -and -not $partition.DriveLetter) {
+				Write-Output "Assigning drive letter to partition $($partition.PartitionNumber)..."
+				$partition | Add-PartitionAccessPath -AssignDriveLetter
+				$partition = Get-Partition -DiskNumber $diskNumber -PartitionNumber $partition.PartitionNumber
+			}
+		}
+
+		if (-not $partition) {
+			throw "No suitable partition found on disk"
+		}
+
 		$driveLetter = $partition.DriveLetter
-		$driveLetter
+		if (-not $driveLetter) {
+			throw "Failed to get drive letter for partition"
+		}
+
+		Write-Output "DRIVE_LETTER:$driveLetter"
 	`, vhdxPath)
 
-	driveLetter, err := h.RunPowerShell(mountCmd)
+	output, err := h.RunPowerShell(mountCmd)
 	if err != nil {
 		return fmt.Errorf("failed to mount VHDX: %w", err)
 	}
-	driveLetter = strings.TrimSpace(driveLetter)
+
+	h.logger.Debug("Mount output", "output", output)
+
+	// Parse drive letter from output
+	var driveLetter string
+	for _, line := range strings.Split(output, "\n") {
+		line = strings.TrimSpace(line)
+		if strings.HasPrefix(line, "DRIVE_LETTER:") {
+			driveLetter = strings.TrimPrefix(line, "DRIVE_LETTER:")
+			driveLetter = strings.TrimSpace(driveLetter)
+			break
+		}
+	}
+
+	if driveLetter == "" {
+		return fmt.Errorf("failed to extract drive letter from mount output: %s", output)
+	}
+
+	h.logger.Info("VHDX mounted successfully", "drive_letter", driveLetter)
 
 	// Ensure we unmount on exit
 	defer func() {
 		unmountCmd := fmt.Sprintf(`Dismount-VHD -Path "%s"`, vhdxPath)
 		if _, err := h.RunPowerShell(unmountCmd); err != nil {
 			h.logger.Warn("Failed to unmount VHDX", "path", vhdxPath, "error", err)
+		} else {
+			h.logger.Debug("VHDX unmounted successfully", "path", vhdxPath)
 		}
 	}()
 
@@ -211,29 +298,206 @@ func (h *HyperVManager) InjectConfig(vhdxPath string, config RunnerConfig) error
 		return fmt.Errorf("failed to marshal config: %w", err)
 	}
 
-	// Escape single quotes in JSON for PowerShell
-	escapedJSON := strings.ReplaceAll(string(configJSON), "'", "''")
+	h.logger.Debug("Config JSON created", "size_bytes", len(configJSON))
 
-	writeCmd := fmt.Sprintf(`
-		Set-Content -Path "%s:\runner-config.json" -Value '%s'
-	`, driveLetter, escapedJSON)
+	// Write JSON to a temporary file first to avoid command line length/escaping issues
+	tempFile := fmt.Sprintf("%s\\runner-config-temp.json", os.TempDir())
+	if err := os.WriteFile(tempFile, configJSON, 0644); err != nil {
+		return fmt.Errorf("failed to write temp config file: %w", err)
+	}
+	defer os.Remove(tempFile) // Clean up temp file
 
-	if _, err := h.RunPowerShell(writeCmd); err != nil {
-		return fmt.Errorf("failed to write config: %w", err)
+	h.logger.Debug("Temp config file created", "path", tempFile)
+
+	// Copy the temp file to the mounted VHDX and verify
+	destPath := fmt.Sprintf("%s:\\runner-config.json", driveLetter)
+	copyAndVerifyCmd := fmt.Sprintf(`
+		$ErrorActionPreference = "Stop"
+		$source = "%s"
+		$dest = "%s"
+
+		Write-Output "Copying from: $source"
+		Write-Output "Copying to: $dest"
+
+		if (-not (Test-Path $source)) {
+			throw "Source file not found: $source"
+		}
+
+		Copy-Item -Path $source -Destination $dest -Force
+
+		if (-not (Test-Path $dest)) {
+			throw "Copy failed - destination file not found: $dest"
+		}
+
+		$copiedSize = (Get-Item $dest).Length
+		Write-Output "File copied successfully. Size: $copiedSize bytes"
+
+		# Verify content
+		$content = Get-Content $dest -Raw
+		Write-Output "Content preview: $($content.Substring(0, [Math]::Min(100, $content.Length)))..."
+
+		Write-Output "SUCCESS"
+	`, tempFile, destPath)
+
+	copyOutput, err := h.RunPowerShell(copyAndVerifyCmd)
+	if err != nil {
+		return fmt.Errorf("failed to copy config to VHDX: %w", err)
 	}
 
-	h.logger.Debug("Config injected into VHDX", "path", vhdxPath)
+	h.logger.Debug("Copy operation output", "output", copyOutput)
+
+	if !strings.Contains(copyOutput, "SUCCESS") {
+		return fmt.Errorf("config copy verification failed: %s", copyOutput)
+	}
+
+	h.logger.Info("Config injected and verified successfully",
+		"vhdx_path", vhdxPath,
+		"destination", destPath,
+		"config_size", len(configJSON))
+
 	return nil
 }
 
-// RunPowerShell executes a PowerShell command
-func (h *HyperVManager) RunPowerShell(command string) (string, error) {
-	cmd := exec.Command("powershell", "-Command", command)
-	output, err := cmd.CombinedOutput()
+// CleanupLeftoverResources removes any VMs and VHDXs matching the name prefix from previous runs
+func (h *HyperVManager) CleanupLeftoverResources(namePrefix string) error {
+	h.logger.Info("Cleaning up leftover resources from previous runs", "name_prefix", namePrefix)
+
+	cleanupCmd := fmt.Sprintf(`
+		$ErrorActionPreference = "Continue"
+		$namePrefix = "%s"
+		$storagePath = "%s"
+		$cleaned = 0
+
+		# Find and remove VMs matching the prefix
+		$vms = Get-VM | Where-Object { $_.Name -like "$namePrefix*" }
+		foreach ($vm in $vms) {
+			Write-Output "Removing VM: $($vm.Name)"
+			try {
+				Stop-VM -Name $vm.Name -TurnOff -Force -ErrorAction SilentlyContinue
+				Remove-VM -Name $vm.Name -Force -ErrorAction Stop
+				$cleaned++
+				Write-Output "  Removed successfully"
+			} catch {
+				Write-Output "  Warning: Failed to remove VM: $_"
+			}
+		}
+
+		# Find and remove orphaned VHDX files matching the prefix
+		if (Test-Path $storagePath) {
+			$vhdxFiles = Get-ChildItem -Path $storagePath -Filter "$namePrefix*.vhdx" -ErrorAction SilentlyContinue
+			foreach ($file in $vhdxFiles) {
+				Write-Output "Removing VHDX: $($file.Name)"
+				try {
+					# Try to dismount if mounted
+					Dismount-VHD -Path $file.FullName -ErrorAction SilentlyContinue
+
+					# Delete the file
+					Remove-Item -Path $file.FullName -Force -ErrorAction Stop
+					$cleaned++
+					Write-Output "  Removed successfully"
+				} catch {
+					Write-Output "  Warning: Failed to remove VHDX: $_"
+				}
+			}
+		}
+
+		Write-Output "Cleanup complete. Removed $cleaned resources."
+		if ($cleaned -gt 0) {
+			Write-Output "CLEANUP_PERFORMED"
+		}
+	`, namePrefix, h.config.HyperV.VMStoragePath)
+
+	output, err := h.RunPowerShell(cleanupCmd)
 	if err != nil {
-		return string(output), fmt.Errorf("powershell error: %w - output: %s", err, string(output))
+		h.logger.Warn("Cleanup encountered errors (this is usually okay)", "error", err, "output", output)
+		// Don't fail startup due to cleanup errors - they're often expected
+	} else {
+		h.logger.Debug("Cleanup output", "output", output)
+		if strings.Contains(output, "CLEANUP_PERFORMED") {
+			h.logger.Info("Leftover resources cleaned up successfully")
+		} else {
+			h.logger.Debug("No leftover resources found")
+		}
 	}
-	return string(output), nil
+
+	return nil
+}
+
+// RunPowerShell executes a PowerShell command by writing it to a temp file and executing it
+// This approach is more robust than -Command for multi-line scripts and avoids escaping issues
+func (h *HyperVManager) RunPowerShell(command string) (string, error) {
+	// Create a temporary PowerShell script file
+	tempFile, err := os.CreateTemp("", "hyperv-runner-*.ps1")
+	if err != nil {
+		return "", fmt.Errorf("failed to create temp script file: %w", err)
+	}
+	defer os.Remove(tempFile.Name())
+
+	// Write the command to the temp file
+	if _, err := tempFile.WriteString(command); err != nil {
+		tempFile.Close()
+		return "", fmt.Errorf("failed to write to temp script file: %w", err)
+	}
+	tempFile.Close()
+
+	// Log the command at debug level (truncate if very long)
+	commandPreview := command
+	if len(commandPreview) > 200 {
+		commandPreview = commandPreview[:200] + "... (truncated)"
+	}
+	h.logger.Debug("Executing PowerShell script",
+		"script_file", tempFile.Name(),
+		"command_preview", commandPreview,
+		"command_length", len(command))
+
+	// Optionally save to debug directory for manual testing
+	if debugDir := os.Getenv("POWERSHELL_DEBUG_DIR"); debugDir != "" {
+		timestamp := time.Now().Format("20060102-150405.000")
+		debugFile := fmt.Sprintf("%s\\ps-%s.ps1", debugDir, timestamp)
+		if err := os.WriteFile(debugFile, []byte(command), 0644); err != nil {
+			h.logger.Warn("Failed to save debug script", "path", debugFile, "error", err)
+		} else {
+			h.logger.Debug("Saved PowerShell script to debug directory", "path", debugFile)
+		}
+	}
+
+	// Execute PowerShell with -File parameter (more robust than -Command)
+	cmd := exec.Command("powershell.exe", "-ExecutionPolicy", "Bypass", "-NoProfile", "-File", tempFile.Name())
+
+	// Capture stdout and stderr separately for better debugging
+	var stdout, stderr strings.Builder
+	cmd.Stdout = &stdout
+	cmd.Stderr = &stderr
+
+	err = cmd.Run()
+	stdoutStr := stdout.String()
+	stderrStr := stderr.String()
+
+	if err != nil {
+		// Build detailed error message
+		errMsg := fmt.Sprintf("powershell error: %v", err)
+		if len(stdoutStr) > 0 {
+			errMsg += fmt.Sprintf("\nstdout: %s", stdoutStr)
+		}
+		if len(stderrStr) > 0 {
+			errMsg += fmt.Sprintf("\nstderr: %s", stderrStr)
+		}
+		errMsg += fmt.Sprintf("\nscript_file: %s (saved for debugging)", tempFile.Name())
+		errMsg += fmt.Sprintf("\ncommand_preview: %s", commandPreview)
+
+		return stdoutStr + stderrStr, fmt.Errorf("%s", errMsg)
+	}
+
+	// Return combined output (stdout + stderr)
+	output := stdoutStr
+	if len(stderrStr) > 0 {
+		output += stderrStr
+	}
+
+	h.logger.Debug("PowerShell script executed successfully",
+		"output_length", len(output))
+
+	return output, nil
 }
 
 // ========================================
@@ -305,6 +569,12 @@ func (m *MockVMManager) RunPowerShell(command string) (string, error) {
 	return "mock output", nil
 }
 
+// CleanupLeftoverResources simulates cleanup
+func (m *MockVMManager) CleanupLeftoverResources(namePrefix string) error {
+	m.logger.Debug("Cleanup leftover resources (simulated)", "name_prefix", namePrefix)
+	return nil
+}
+
 // ========================================
 // Orchestrator
 // ========================================
@@ -316,28 +586,44 @@ type Orchestrator struct {
 	vmPool    []*VMSlot
 	mu        sync.Mutex
 	logger    *slog.Logger
+	ctx       context.Context
+	cancel    context.CancelFunc
 }
 
 // NewOrchestrator creates a new orchestrator instance
 func NewOrchestrator(config Config, vmManager VMManager, logger *slog.Logger) *Orchestrator {
+	ctx, cancel := context.WithCancel(context.Background())
 	return &Orchestrator{
 		config:    config,
 		vmManager: vmManager,
-		vmPool:    make([]*VMSlot, config.PoolSize),
+		vmPool:    make([]*VMSlot, config.Runners.PoolSize),
 		logger:    logger.With("component", "orchestrator"),
+		ctx:       ctx,
+		cancel:    cancel,
 	}
 }
 
 // InitializePool creates the initial warm pool of VMs
 func (o *Orchestrator) InitializePool() error {
-	o.logger.Info("Initializing warm pool of VMs", "pool_size", o.config.PoolSize)
+	// First, cleanup any leftover resources from previous runs
+	namePrefix := o.config.Runners.NamePrefix
+	if namePrefix == "" {
+		namePrefix = "runner-"
+	}
+
+	o.logger.Info("Performing startup cleanup", "name_prefix", namePrefix)
+	if err := o.vmManager.CleanupLeftoverResources(namePrefix); err != nil {
+		o.logger.Warn("Cleanup encountered errors (continuing anyway)", "error", err)
+	}
+
+	o.logger.Info("Initializing warm pool of VMs", "pool_size", o.config.Runners.PoolSize)
 
 	var wg sync.WaitGroup
-	errChan := make(chan error, o.config.PoolSize)
+	errChan := make(chan error, o.config.Runners.PoolSize)
 
-	for i := 0; i < o.config.PoolSize; i++ {
+	for i := 0; i < o.config.Runners.PoolSize; i++ {
 		slotIndex := i
-		vmName := fmt.Sprintf("runner-%d", i+1)
+		vmName := fmt.Sprintf("%s%d", namePrefix, i+1)
 
 		o.vmPool[slotIndex] = &VMSlot{
 			Name:  vmName,
@@ -402,21 +688,21 @@ func (o *Orchestrator) createAndRegisterVM(slot *VMSlot) error {
 // getGitHubRunnerToken generates a GitHub runner registration token
 func (o *Orchestrator) getGitHubRunnerToken() (string, error) {
 	// In mock mode, return a fake token without calling GitHub API
-	if o.config.GitHubPAT == "mock-token" {
+	if o.config.GitHub.Token == "mock-token" {
 		mockToken := fmt.Sprintf("mock-runner-token-%d", time.Now().UnixNano())
 		o.logger.Debug("Generated mock token", "token", mockToken)
 		return mockToken, nil
 	}
 
 	var url string
-	if o.config.GitHubRepo != "" {
+	if o.config.GitHub.Repo != "" {
 		// Repository-level runner
 		url = fmt.Sprintf("https://api.github.com/repos/%s/%s/actions/runners/registration-token",
-			o.config.GitHubOrg, o.config.GitHubRepo)
+			o.config.GitHub.Org, o.config.GitHub.Repo)
 	} else {
 		// Organization-level runner
 		url = fmt.Sprintf("https://api.github.com/orgs/%s/actions/runners/registration-token",
-			o.config.GitHubOrg)
+			o.config.GitHub.Org)
 	}
 
 	req, err := http.NewRequest("POST", url, nil)
@@ -424,7 +710,7 @@ func (o *Orchestrator) getGitHubRunnerToken() (string, error) {
 		return "", err
 	}
 
-	req.Header.Set("Authorization", "Bearer "+o.config.GitHubPAT)
+	req.Header.Set("Authorization", "Bearer "+o.config.GitHub.Token)
 	req.Header.Set("Accept", "application/vnd.github+json")
 	req.Header.Set("X-GitHub-Api-Version", "2022-11-28")
 
@@ -497,27 +783,122 @@ func (o *Orchestrator) MonitorVMState(slot *VMSlot) {
 	ticker := time.NewTicker(10 * time.Second)
 	defer ticker.Stop()
 
-	for range ticker.C {
-		state, err := o.vmManager.GetVMState(slot.Name)
-		if err != nil {
-			o.logger.Error("Failed to get VM state", "vm_name", slot.Name, "error", err)
-			continue
-		}
-
-		// If VM is stopped/off, it means job completed and VM shut down
-		if state == "Off" || state == "Stopped" {
-			o.logger.Info("VM stopped, recreating", "vm_name", slot.Name)
-			ticker.Stop()
-
-			// Recreate the VM asynchronously
-			go func() {
-				if err := o.RecreateVM(slot.Name); err != nil {
-					o.logger.Error("Error recreating VM", "vm_name", slot.Name, "error", err)
-				}
-			}()
+	for {
+		select {
+		case <-o.ctx.Done():
+			// Context cancelled, stop monitoring
+			o.logger.Debug("Stopping VM monitoring due to shutdown", "vm_name", slot.Name)
 			return
+		case <-ticker.C:
+			state, err := o.vmManager.GetVMState(slot.Name)
+			if err != nil {
+				o.logger.Error("Failed to get VM state", "vm_name", slot.Name, "error", err)
+				continue
+			}
+
+			// If VM is stopped/off, it means job completed and VM shut down
+			if state == "Off" || state == "Stopped" {
+				o.logger.Info("VM stopped, recreating", "vm_name", slot.Name)
+				ticker.Stop()
+
+				// Recreate the VM asynchronously
+				go func() {
+					if err := o.RecreateVM(slot.Name); err != nil {
+						o.logger.Error("Error recreating VM", "vm_name", slot.Name, "error", err)
+					}
+				}()
+				return
+			}
 		}
 	}
+}
+
+// Shutdown gracefully shuts down the orchestrator and cleans up all VMs
+func (o *Orchestrator) Shutdown() error {
+	o.logger.Info("Shutting down orchestrator and cleaning up VMs...")
+
+	// Cancel context to stop all monitoring goroutines
+	o.cancel()
+
+	// Give monitoring goroutines a moment to stop
+	time.Sleep(1 * time.Second)
+
+	namePrefix := o.config.Runners.NamePrefix
+	if namePrefix == "" {
+		namePrefix = "runner-"
+	}
+
+	// Cleanup all VMs
+	if err := o.vmManager.CleanupLeftoverResources(namePrefix); err != nil {
+		o.logger.Warn("Errors during shutdown cleanup", "error", err)
+		return err
+	}
+
+	o.logger.Info("Orchestrator shutdown complete")
+	return nil
+}
+
+// ========================================
+// Configuration Loading
+// ========================================
+
+// loadConfigFromFile loads configuration from a YAML file
+func loadConfigFromFile(path string) (*Config, error) {
+	data, err := os.ReadFile(path)
+	if err != nil {
+		return nil, fmt.Errorf("failed to read config file: %w", err)
+	}
+
+	var config Config
+	if err := yaml.Unmarshal(data, &config); err != nil {
+		return nil, fmt.Errorf("failed to parse YAML config: %w", err)
+	}
+
+	// Set defaults
+	if config.Runners.PoolSize == 0 {
+		config.Runners.PoolSize = 1
+	}
+	if config.Runners.NamePrefix == "" {
+		config.Runners.NamePrefix = "runner-"
+	}
+	if config.Debug.LogLevel == "" {
+		config.Debug.LogLevel = "info"
+	}
+	if config.Debug.LogFormat == "" {
+		config.Debug.LogFormat = "text"
+	}
+
+	// Get current working directory for default paths
+	if config.HyperV.TemplatePath == "" || config.HyperV.VMStoragePath == "" {
+		cwd, err := os.Getwd()
+		if err != nil {
+			return nil, fmt.Errorf("failed to get current directory: %w", err)
+		}
+
+		if config.HyperV.TemplatePath == "" {
+			config.HyperV.TemplatePath = fmt.Sprintf(`%s\vms\templates\runner-template.vhdx`, cwd)
+		}
+		if config.HyperV.VMStoragePath == "" {
+			config.HyperV.VMStoragePath = fmt.Sprintf(`%s\vms\storage`, cwd)
+		}
+	}
+
+	// Validate required fields (unless in mock mode)
+	if !config.Debug.UseMock {
+		if config.GitHub.Token == "" || config.GitHub.Org == "" {
+			return nil, fmt.Errorf("github.token and github.org are required when debug.use_mock is false")
+		}
+	} else {
+		// Set dummy values for mock mode if not provided
+		if config.GitHub.Token == "" {
+			config.GitHub.Token = "mock-token"
+		}
+		if config.GitHub.Org == "" {
+			config.GitHub.Org = "mock-org"
+		}
+	}
+
+	return &config, nil
 }
 
 // ========================================
@@ -525,9 +906,9 @@ func (o *Orchestrator) MonitorVMState(slot *VMSlot) {
 // ========================================
 
 // setupLogger creates and configures the application logger
-func setupLogger() *slog.Logger {
-	// Get log level from environment (default: INFO)
-	logLevel := strings.ToLower(getEnvOrDefault("LOG_LEVEL", "info"))
+func setupLogger(logLevel, logFormat string) *slog.Logger {
+	// Parse log level
+	logLevel = strings.ToLower(logLevel)
 	var level slog.Level
 	switch logLevel {
 	case "debug":
@@ -542,8 +923,8 @@ func setupLogger() *slog.Logger {
 		level = slog.LevelInfo
 	}
 
-	// Get log format from environment (default: text)
-	logFormat := strings.ToLower(getEnvOrDefault("LOG_FORMAT", "text"))
+	// Parse log format
+	logFormat = strings.ToLower(logFormat)
 
 	var handler slog.Handler
 	opts := &slog.HandlerOptions{
@@ -560,86 +941,87 @@ func setupLogger() *slog.Logger {
 }
 
 func main() {
-	// Setup logger
-	logger := setupLogger()
+	app := &cli.Command{
+		Name:    "hyperv-runner-pool",
+		Usage:   "Manage a pool of ephemeral Hyper-V VMs for GitHub Actions runners",
+		Version: fmt.Sprintf("%s (commit: %s, built: %s)", version, commit, date),
+		Flags: []cli.Flag{
+			&cli.StringFlag{
+				Name:     "config",
+				Aliases:  []string{"c"},
+				Usage:    "Path to YAML configuration file",
+				Required: true,
+			},
+		},
+		Action: func(ctx context.Context, cmd *cli.Command) error {
+			configPath := cmd.String("config")
 
-	// Print version information
-	logger.Info("Starting Hyper-V Runner Pool",
-		"version", version,
-		"commit", commit,
-		"built", date)
+			// Load configuration from YAML file
+			config, err := loadConfigFromFile(configPath)
+			if err != nil {
+				return fmt.Errorf("failed to load config: %w", err)
+			}
 
-	// Get current working directory for default paths
-	cwd, err := os.Getwd()
-	if err != nil {
-		logger.Error("Failed to get current directory", "error", err)
+			// Setup logger with config
+			logger := setupLogger(config.Debug.LogLevel, config.Debug.LogFormat)
+
+			// Print version information
+			logger.Info("Starting Hyper-V Runner Pool",
+				"version", version,
+				"commit", commit,
+				"built", date)
+
+			logger.Info("Configuration loaded",
+				"config_file", configPath,
+				"pool_size", config.Runners.PoolSize,
+				"mock_mode", config.Debug.UseMock)
+			logger.Info("Using template path", "path", config.HyperV.TemplatePath)
+			logger.Info("Using storage path", "path", config.HyperV.VMStoragePath)
+
+			// Determine VM manager based on config
+			var vmManager VMManager
+
+			if config.Debug.UseMock {
+				logger.Info("Using Mock VM Manager (development mode)")
+				vmManager = NewMockVMManager(logger)
+			} else {
+				logger.Info("Using Hyper-V VM Manager (production mode)")
+				vmManager = NewHyperVManager(*config, logger)
+			}
+
+			// Create orchestrator
+			orchestrator := NewOrchestrator(*config, vmManager, logger)
+
+			// Initialize VM pool
+			if err := orchestrator.InitializePool(); err != nil {
+				return fmt.Errorf("failed to initialize pool: %w", err)
+			}
+
+			// Setup signal handling for graceful shutdown
+			sigChan := make(chan os.Signal, 1)
+			signal.Notify(sigChan, os.Interrupt, syscall.SIGTERM)
+
+			// Keep the orchestrator running
+			logger.Info("Orchestrator running, monitoring VMs for job completion")
+			logger.Info("Press Ctrl+C to shutdown gracefully")
+
+			// Wait for shutdown signal
+			sig := <-sigChan
+			logger.Info("Received shutdown signal", "signal", sig.String())
+
+			// Perform graceful shutdown
+			if err := orchestrator.Shutdown(); err != nil {
+				logger.Error("Error during shutdown", "error", err)
+				return err
+			}
+
+			logger.Info("Shutdown complete")
+			return nil
+		},
+	}
+
+	if err := app.Run(context.Background(), os.Args); err != nil {
+		fmt.Fprintf(os.Stderr, "Error: %v\n", err)
 		os.Exit(1)
 	}
-
-	// Default paths relative to repository
-	defaultTemplatePath := fmt.Sprintf(`%s\vms\templates\runner-template.vhdx`, cwd)
-	defaultStoragePath := fmt.Sprintf(`%s\vms\storage`, cwd)
-
-	// Load configuration from environment
-	config := Config{
-		GitHubPAT:     os.Getenv("GITHUB_PAT"),
-		GitHubOrg:     os.Getenv("GITHUB_ORG"),
-		GitHubRepo:    os.Getenv("GITHUB_REPO"),
-		PoolSize:      4, // Default pool size
-		TemplatePath:  getEnvOrDefault("VM_TEMPLATE_PATH", defaultTemplatePath),
-		VMStoragePath: getEnvOrDefault("VM_STORAGE_PATH", defaultStoragePath),
-	}
-
-	logger.Info("Using template path", "path", config.TemplatePath)
-	logger.Info("Using storage path", "path", config.VMStoragePath)
-
-	// Determine VM manager based on platform
-	useMock := os.Getenv("USE_MOCK") == "true"
-	var vmManager VMManager
-
-	if useMock {
-		logger.Info("Using Mock VM Manager (development mode)")
-		vmManager = NewMockVMManager(logger)
-
-		// Use dummy values for mock mode if not provided
-		if config.GitHubPAT == "" {
-			config.GitHubPAT = "mock-token"
-			logger.Debug("Using mock GitHub PAT")
-		}
-		if config.GitHubOrg == "" {
-			config.GitHubOrg = "mock-org"
-			logger.Debug("Using mock GitHub organization")
-		}
-	} else {
-		logger.Info("Using Hyper-V VM Manager (production mode)")
-
-		// Validate required configuration for production mode
-		if config.GitHubPAT == "" || config.GitHubOrg == "" {
-			logger.Error("Missing required environment variables: GITHUB_PAT, GITHUB_ORG")
-			os.Exit(1)
-		}
-
-		vmManager = NewHyperVManager(config, logger)
-	}
-
-	// Create orchestrator
-	orchestrator := NewOrchestrator(config, vmManager, logger)
-
-	// Initialize VM pool
-	if err := orchestrator.InitializePool(); err != nil {
-		logger.Error("Failed to initialize pool", "error", err)
-		os.Exit(1)
-	}
-
-	// Keep the orchestrator running
-	logger.Info("Orchestrator running, monitoring VMs for job completion")
-	select {} // Block forever while monitoring goroutines run
-}
-
-// getEnvOrDefault returns environment variable value or default
-func getEnvOrDefault(key, defaultValue string) string {
-	if value := os.Getenv(key); value != "" {
-		return value
-	}
-	return defaultValue
 }

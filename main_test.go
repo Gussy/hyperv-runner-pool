@@ -136,17 +136,21 @@ func TestMockVMManager_RunPowerShell(t *testing.T) {
 
 func setupTestOrchestrator() *Orchestrator {
 	config := Config{
-		GitHubPAT:  "test-token",
-		GitHubOrg:  "test-org",
-		GitHubRepo: "test-repo",
-		PoolSize:   2,
+		GitHub: GitHubConfig{
+			Token: "test-token",
+			Org:   "test-org",
+			Repo:  "test-repo",
+		},
+		Runners: RunnersConfig{
+			PoolSize: 2,
+		},
 	}
 
 	vmManager := NewMockVMManager(testLogger())
 	orchestrator := NewOrchestrator(config, vmManager, testLogger())
 
 	// Initialize VM slots for testing
-	for i := 0; i < orchestrator.config.PoolSize; i++ {
+	for i := 0; i < orchestrator.config.Runners.PoolSize; i++ {
 		orchestrator.vmPool[i] = &VMSlot{
 			Name:  "runner-" + string(rune('0'+i+1)),
 			State: StateEmpty,
@@ -158,9 +162,13 @@ func setupTestOrchestrator() *Orchestrator {
 
 func TestNewOrchestrator(t *testing.T) {
 	config := Config{
-		GitHubPAT: "test-token",
-		GitHubOrg: "test-org",
-		PoolSize:  4,
+		GitHub: GitHubConfig{
+			Token: "test-token",
+			Org:   "test-org",
+		},
+		Runners: RunnersConfig{
+			PoolSize: 4,
+		},
 	}
 
 	vmManager := NewMockVMManager(testLogger())
@@ -170,11 +178,11 @@ func TestNewOrchestrator(t *testing.T) {
 		t.Fatal("Failed to create orchestrator")
 	}
 
-	if len(orchestrator.vmPool) != config.PoolSize {
-		t.Errorf("Expected pool size %d, got %d", config.PoolSize, len(orchestrator.vmPool))
+	if len(orchestrator.vmPool) != config.Runners.PoolSize {
+		t.Errorf("Expected pool size %d, got %d", config.Runners.PoolSize, len(orchestrator.vmPool))
 	}
 
-	if orchestrator.config.GitHubPAT != config.GitHubPAT {
+	if orchestrator.config.GitHub.Token != config.GitHub.Token {
 		t.Error("Config not properly set")
 	}
 }
@@ -247,27 +255,6 @@ func TestRunnerConfig_JSONSerialization(t *testing.T) {
 }
 
 // ========================================
-// Utility Function Tests
-// ========================================
-
-func TestGetEnvOrDefault(t *testing.T) {
-	// Test with unset environment variable
-	result := getEnvOrDefault("NONEXISTENT_VAR_12345", "default-value")
-	if result != "default-value" {
-		t.Errorf("Expected 'default-value', got '%s'", result)
-	}
-
-	// Test with set environment variable
-	os.Setenv("TEST_VAR_12345", "actual-value")
-	defer os.Unsetenv("TEST_VAR_12345")
-
-	result = getEnvOrDefault("TEST_VAR_12345", "default-value")
-	if result != "actual-value" {
-		t.Errorf("Expected 'actual-value', got '%s'", result)
-	}
-}
-
-// ========================================
 // Concurrent Operations Tests
 // ========================================
 
@@ -333,10 +320,14 @@ func TestConcurrentVMOperations(t *testing.T) {
 
 func TestOrchestratorInitializePool(t *testing.T) {
 	config := Config{
-		GitHubPAT:  "test-token",
-		GitHubOrg:  "test-org",
-		GitHubRepo: "test-repo",
-		PoolSize:   2,
+		GitHub: GitHubConfig{
+			Token: "test-token",
+			Org:   "test-org",
+			Repo:  "test-repo",
+		},
+		Runners: RunnersConfig{
+			PoolSize: 2,
+		},
 	}
 
 	vmManager := NewMockVMManager(testLogger())

@@ -10,9 +10,8 @@ runner-orchestrator.exe
 *.so
 *.dylib
 
-# Environment files
-.env
-.env.local
+# Config files
+config.yaml
 
 # Test coverage
 *.out

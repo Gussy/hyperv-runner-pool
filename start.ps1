@@ -7,63 +7,35 @@ Write-Host "  Hyper-V Runner Pool" -ForegroundColor Cyan
 Write-Host "==================================================" -ForegroundColor Cyan
 Write-Host ""
 
-# Check if .env file exists
-if (-not (Test-Path ".env")) {
+# Default to config.yaml in current directory
+$ConfigFile = "config.yaml"
+
+# Allow overriding config file via command line argument
+if ($args.Count -gt 0) {
+    $ConfigFile = $args[0]
+}
+
+# Check if config file exists
+if (-not (Test-Path $ConfigFile)) {
     Write-Host ""
-    Write-Host "ERROR: .env file not found!" -ForegroundColor Red
+    Write-Host "ERROR: Configuration file not found: $ConfigFile" -ForegroundColor Red
     Write-Host ""
-    Write-Host "Please create a .env file based on .env.example:" -ForegroundColor Yellow
-    Write-Host "  1. Copy .env.example to .env"
+    Write-Host "Please create a config.yaml file based on config.example.yaml:" -ForegroundColor Yellow
+    Write-Host "  1. Copy config.example.yaml to config.yaml"
     Write-Host "  2. Fill in your actual values:"
-    Write-Host "     - GITHUB_PAT: Your GitHub Personal Access Token"
-    Write-Host "     - GITHUB_ORG: Your organization name"
-    Write-Host "     - GITHUB_REPO: Your repository name (or leave empty for org runners)"
+    Write-Host "     - github_pat: Your GitHub Personal Access Token"
+    Write-Host "     - github_org: Your organization name"
+    Write-Host "     - github_repo: Your repository name (or leave empty for org runners)"
     Write-Host ""
     Write-Host "Example:"
-    Write-Host "  Copy-Item .env.example .env"
-    Write-Host "  notepad .env"
+    Write-Host "  Copy-Item config.example.yaml config.yaml"
+    Write-Host "  notepad config.yaml"
     Write-Host ""
     exit 1
 }
 
-# Load environment variables from .env file
-Write-Host "Loading configuration from .env..." -ForegroundColor Yellow
-Get-Content ".env" | ForEach-Object {
-    if ($_ -match '^\s*([^#][^=]+)=(.*)$') {
-        $name = $matches[1].Trim()
-        $value = $matches[2].Trim()
-        [Environment]::SetEnvironmentVariable($name, $value, "Process")
-
-        # Censor sensitive values
-        $displayValue = $value
-        if ($name -eq 'GITHUB_PAT' -and $value.Length -gt 6) {
-            $displayValue = $value.Substring(0, 12) + "********"
-        }
-        Write-Host "  $name = $displayValue" -ForegroundColor Gray
-    }
-}
-
+Write-Host "Using configuration file: $ConfigFile" -ForegroundColor Yellow
 Write-Host ""
-
-# Validate required environment variables
-$required = @("GITHUB_PAT", "GITHUB_ORG")
-$missing = @()
-
-foreach ($var in $required) {
-    if (-not [Environment]::GetEnvironmentVariable($var)) {
-        $missing += $var
-    }
-}
-
-if ($missing.Count -gt 0) {
-    Write-Host ""
-    Write-Host "ERROR: Missing required environment variables in .env:" -ForegroundColor Red
-    Write-Host "  $($missing -join ', ')" -ForegroundColor Yellow
-    Write-Host ""
-    Write-Host "Please update your .env file with these values." -ForegroundColor Yellow
-    Write-Host ""
-    exit 1
-}
 
 # Check if binary exists
 if (-not (Test-Path "hyperv-runner-pool.exe")) {
@@ -99,58 +71,8 @@ catch {
 
 Write-Host ""
 
-# Check required directories (use environment variables or defaults)
-$templatePath = [Environment]::GetEnvironmentVariable("VM_TEMPLATE_PATH")
-$storagePath = [Environment]::GetEnvironmentVariable("VM_STORAGE_PATH")
-
-# Use defaults if not specified in environment
-if (-not $templatePath) {
-    $templatePath = "vms\templates\runner-template.vhdx"
-}
-
-if (-not $storagePath) {
-    $storagePath = "vms\storage"
-}
-
-Write-Host "Checking VM configuration..." -ForegroundColor Yellow
-Write-Host "  Template path: $templatePath" -ForegroundColor Gray
-Write-Host "  Storage path:  $storagePath" -ForegroundColor Gray
-
-# Extract directory from template path
-$templateDir = Split-Path $templatePath -Parent
-
-# Ensure directories exist
-if ($templateDir -and -not (Test-Path $templateDir)) {
-    Write-Host "  Creating template directory: $templateDir" -ForegroundColor Yellow
-    New-Item -Path $templateDir -ItemType Directory -Force | Out-Null
-}
-
-if (-not (Test-Path $storagePath)) {
-    Write-Host "  Creating storage directory: $storagePath" -ForegroundColor Yellow
-    New-Item -Path $storagePath -ItemType Directory -Force | Out-Null
-}
-
-# Check for template file
-if (-not (Test-Path $templatePath)) {
-    Write-Host ""
-    Write-Host "WARNING: Template file not found: $templatePath" -ForegroundColor Yellow
-    Write-Host ""
-    Write-Host "You need to build the VM template with Packer first:" -ForegroundColor Yellow
-    Write-Host "  cd packer"
-    Write-Host "  packer init ."
-    Write-Host "  packer build windows-runner.pkr.hcl"
-    Write-Host ""
-    Write-Host "Then copy the resulting VHDX to: $templatePath"
-    Write-Host ""
-    Write-Host "Example:"
-    Write-Host "  Copy the .vhdx file from output-windows-runner\Virtual Hard Disks\"
-    Write-Host "  to vms\templates\runner-template.vhdx"
-    Write-Host ""
-}
-
-Write-Host ""
 Write-Host "Starting runner pool..." -ForegroundColor Green
 Write-Host ""
 
-# Start the runner pool
-& .\hyperv-runner-pool.exe
+# Start the runner pool with config file
+& .\hyperv-runner-pool.exe --config $ConfigFile
