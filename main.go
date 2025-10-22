@@ -5,7 +5,6 @@ import (
 	_ "embed"
 	"encoding/json"
 	"fmt"
-	"io"
 	"log/slog"
 	"net/http"
 	"os"
@@ -16,6 +15,8 @@ import (
 	"syscall"
 	"time"
 
+	"github.com/bradleyfalzon/ghinstallation/v2"
+	"github.com/google/go-github/v69/github"
 	"github.com/urfave/cli/v3"
 	"gopkg.in/yaml.v3"
 )
@@ -44,15 +45,27 @@ type Config struct {
 
 // GitHubConfig holds GitHub-specific configuration
 type GitHubConfig struct {
-	Token string `yaml:"token"`
-	Org   string `yaml:"org"`
-	Repo  string `yaml:"repo"`
+	AppID             int64  `yaml:"app_id"`
+	AppPrivateKeyPath string `yaml:"app_private_key_path"`
+	Org               string `yaml:"org"`
+	User              string `yaml:"user"` // Alternative to Org for personal accounts
+	Repo              string `yaml:"repo"`
+}
+
+// GetAccount returns the account name (org or user)
+func (c *GitHubConfig) GetAccount() string {
+	if c.Org != "" {
+		return c.Org
+	}
+	return c.User
 }
 
 // RunnersConfig holds runner pool configuration
 type RunnersConfig struct {
-	PoolSize   int    `yaml:"pool_size"`
-	NamePrefix string `yaml:"name_prefix"`
+	PoolSize    int      `yaml:"pool_size"`
+	NamePrefix  string   `yaml:"name_prefix"`
+	Labels      []string `yaml:"labels"`       // Custom labels to add to runners
+	RunnerGroup string   `yaml:"runner_group"` // Runner group (org-level runners only)
 }
 
 // HyperVConfig holds Hyper-V specific configuration
@@ -72,11 +85,12 @@ type DebugConfig struct {
 
 // RunnerConfig is the configuration sent to VMs for runner registration
 type RunnerConfig struct {
-	Token        string `json:"token"`
+	Token       string `json:"token"`
 	Organization string `json:"organization"`
 	Repository   string `json:"repository"`
 	Name         string `json:"name"`
 	Labels       string `json:"labels"`
+	RunnerGroup string `json:"runner_group,omitempty"` // Optional: for org-level runners only
 }
 
 // VMState represents the lifecycle state of a VM
@@ -137,23 +151,33 @@ func (h *HyperVManager) CreateVM(slot *VMSlot) error {
 	vmName := slot.Name
 	vhdxPath := fmt.Sprintf("%s\\%s.vhdx", h.config.HyperV.VMStoragePath, vmName)
 
-	// Copy template VHDX to VM storage
-	copyCmd := fmt.Sprintf(
-		`Copy-Item -Path "%s" -Destination "%s" -Force`,
+	// Create differencing disk (child VHDX) referencing the parent template
+	// This is much faster than copying the entire VHDX (~1s vs 15s) and uses less storage
+	// The child disk only stores changes from the parent template
+	// NOTE: Parent template must be read-only to prevent corruption of child disks
+	//       Run: Set-ItemProperty -Path "template.vhdx" -Name IsReadOnly -Value $true
+	createDiffCmd := fmt.Sprintf(
+		`New-VHD -ParentPath "%s" -Path "%s" -Differencing`,
 		h.config.HyperV.TemplatePath,
 		vhdxPath,
 	)
-	if _, err := h.RunPowerShell(copyCmd); err != nil {
-		return fmt.Errorf("failed to copy template: %w", err)
+	if _, err := h.RunPowerShell(createDiffCmd); err != nil {
+		return fmt.Errorf("failed to create differencing disk: %w", err)
 	}
 
 	// Inject runner config into VHDX (before creating VM)
+	// Build labels: start with defaults, then add custom labels
+	defaultLabels := []string{"self-hosted", "Windows", "X64", "ephemeral"}
+	allLabels := append(defaultLabels, h.config.Runners.Labels...)
+	labelsStr := strings.Join(allLabels, ",")
+
 	runnerConfig := RunnerConfig{
 		Token:        slot.RunnerToken,
-		Organization: h.config.GitHub.Org,
+		Organization: h.config.GitHub.GetAccount(),
 		Repository:   h.config.GitHub.Repo,
 		Name:         vmName,
-		Labels:       "self-hosted,Windows,X64,ephemeral",
+		Labels:       labelsStr,
+		RunnerGroup:  h.config.Runners.RunnerGroup,
 	}
 
 	if err := h.InjectConfig(vhdxPath, runnerConfig); err != nil {
@@ -470,8 +494,10 @@ func (h *HyperVManager) CleanupLeftoverResources(namePrefix string) error {
 		$storagePath = "%s"
 		$cleaned = 0
 
-		# Find and remove VMs matching the prefix
-		$vms = Get-VM | Where-Object { $_.Name -like "$namePrefix*" }
+		# Find and remove VMs matching the prefix followed by digits only
+		# This ensures we only match numbered pool VMs like "github-runner-1", "github-runner-2"
+		# and NOT other VMs like "github-runner-basic", "github-runner-template", etc.
+		$vms = Get-VM | Where-Object { $_.Name -match "^$([regex]::Escape($namePrefix))\d+$" }
 		foreach ($vm in $vms) {
 			Write-Output "Removing VM: $($vm.Name)"
 			try {
@@ -484,9 +510,10 @@ func (h *HyperVManager) CleanupLeftoverResources(namePrefix string) error {
 			}
 		}
 
-		# Find and remove orphaned VHDX files matching the prefix
+		# Find and remove orphaned VHDX files matching the prefix followed by digits only
 		if (Test-Path $storagePath) {
-			$vhdxFiles = Get-ChildItem -Path $storagePath -Filter "$namePrefix*.vhdx" -ErrorAction SilentlyContinue
+			$vhdxFiles = Get-ChildItem -Path $storagePath -Filter "$namePrefix*.vhdx" -ErrorAction SilentlyContinue |
+				Where-Object { $_.BaseName -match "^$([regex]::Escape($namePrefix))\d+$" }
 			foreach ($file in $vhdxFiles) {
 				Write-Output "Removing VHDX: $($file.Name)"
 				try {
@@ -787,57 +814,98 @@ func (o *Orchestrator) createAndRegisterVM(slot *VMSlot) error {
 	return nil
 }
 
-// getGitHubRunnerToken generates a GitHub runner registration token
+// getGitHubRunnerToken generates a GitHub runner registration token using GitHub App authentication
 func (o *Orchestrator) getGitHubRunnerToken() (string, error) {
 	// In mock mode, return a fake token without calling GitHub API
-	if o.config.GitHub.Token == "mock-token" {
+	if o.config.Debug.UseMock {
 		mockToken := fmt.Sprintf("mock-runner-token-%d", time.Now().UnixNano())
 		o.logger.Debug("Generated mock token", "token", mockToken)
 		return mockToken, nil
 	}
 
-	var url string
+	ctx := context.Background()
+
+	// Create GitHub App transport with JWT authentication
+	appTransport, err := ghinstallation.NewAppsTransportKeyFromFile(
+		http.DefaultTransport,
+		o.config.GitHub.AppID,
+		o.config.GitHub.AppPrivateKeyPath,
+	)
+	if err != nil {
+		return "", fmt.Errorf("failed to create GitHub App transport: %w", err)
+	}
+
+	// Create a GitHub client with app authentication to find installation
+	appClient := github.NewClient(&http.Client{Transport: appTransport})
+
+	// List all installations for this GitHub App
+	// This approach works for both personal accounts and organizations
+	installations, _, err := appClient.Apps.ListInstallations(ctx, nil)
+	if err != nil {
+		return "", fmt.Errorf("failed to list installations: %w", err)
+	}
+
+	// Find the installation matching our configured org/user account
+	account := o.config.GitHub.GetAccount()
+	var installation *github.Installation
+	for _, inst := range installations {
+		if inst.Account != nil && inst.Account.GetLogin() == account {
+			installation = inst
+			break
+		}
+	}
+
+	if installation == nil {
+		return "", fmt.Errorf("GitHub App is not installed on account '%s'. Please install the app at: https://github.com/apps/YOUR_APP_NAME/installations/new", account)
+	}
+
+	o.logger.Debug("Found GitHub App installation",
+		"installation_id", installation.GetID(),
+		"account", account,
+		"account_type", installation.Account.GetType())
+
+	// Create installation transport for API calls as this installation
+	installationTransport := ghinstallation.NewFromAppsTransport(appTransport, installation.GetID())
+
+	// Create GitHub client authenticated as the installation
+	client := github.NewClient(&http.Client{Transport: installationTransport})
+
+	// Generate runner registration token
+	var token *github.RegistrationToken
+	var resp *github.Response
+
+	// Determine if this is a User account (personal) or Organization
+	isUserAccount := installation.Account.GetType() == "User"
+
 	if o.config.GitHub.Repo != "" {
-		// Repository-level runner
-		url = fmt.Sprintf("https://api.github.com/repos/%s/%s/actions/runners/registration-token",
-			o.config.GitHub.Org, o.config.GitHub.Repo)
+		// Repository-level runner (works for both org and user accounts)
+		token, resp, err = client.Actions.CreateRegistrationToken(
+			ctx,
+			o.config.GitHub.GetAccount(),
+			o.config.GitHub.Repo,
+		)
+		if err != nil {
+			return "", fmt.Errorf("failed to create repo runner token: %w", err)
+		}
+	} else if isUserAccount {
+		// Personal accounts don't support account-level runners
+		return "", fmt.Errorf("personal accounts (User type) require a repository to be specified. Please set 'github.repo' in your config")
 	} else {
-		// Organization-level runner
-		url = fmt.Sprintf("https://api.github.com/orgs/%s/actions/runners/registration-token",
-			o.config.GitHub.Org)
+		// Organization-level runner (only for organizations)
+		token, resp, err = client.Actions.CreateOrganizationRegistrationToken(ctx, o.config.GitHub.GetAccount())
+		if err != nil {
+			return "", fmt.Errorf("failed to create org runner token: %w", err)
+		}
 	}
-
-	req, err := http.NewRequest("POST", url, nil)
-	if err != nil {
-		return "", err
-	}
-
-	req.Header.Set("Authorization", "Bearer "+o.config.GitHub.Token)
-	req.Header.Set("Accept", "application/vnd.github+json")
-	req.Header.Set("X-GitHub-Api-Version", "2022-11-28")
-
-	client := &http.Client{Timeout: 10 * time.Second}
-	resp, err := client.Do(req)
-	if err != nil {
-		return "", err
-	}
-	defer resp.Body.Close()
 
 	if resp.StatusCode != http.StatusCreated {
-		body, _ := io.ReadAll(resp.Body)
-		return "", fmt.Errorf("GitHub API error: %d - %s", resp.StatusCode, string(body))
+		return "", fmt.Errorf("GitHub API error: unexpected status code %d", resp.StatusCode)
 	}
 
-	var result struct {
-		Token     string    `json:"token"`
-		ExpiresAt time.Time `json:"expires_at"`
-	}
+	o.logger.Debug("Generated runner registration token",
+		"expires_at", token.GetExpiresAt())
 
-	if err := json.NewDecoder(resp.Body).Decode(&result); err != nil {
-		return "", err
-	}
-
-	return result.Token, nil
+	return token.GetToken(), nil
 }
 
 // RecreateVM destroys and recreates a VM after job completion
@@ -964,10 +1032,10 @@ func loadConfigFromFile(path string) (*Config, error) {
 		config.Runners.NamePrefix = "runner-"
 	}
 	if config.HyperV.VMUsername == "" {
-		config.HyperV.VMUsername = "vagrant"
+		config.HyperV.VMUsername = "Administrator"
 	}
 	if config.HyperV.VMPassword == "" {
-		config.HyperV.VMPassword = "vagrant"
+		config.HyperV.VMPassword = "password"
 	}
 	if config.Debug.LogLevel == "" {
 		config.Debug.LogLevel = "info"
@@ -993,15 +1061,28 @@ func loadConfigFromFile(path string) (*Config, error) {
 
 	// Validate required fields (unless in mock mode)
 	if !config.Debug.UseMock {
-		if config.GitHub.Token == "" || config.GitHub.Org == "" {
-			return nil, fmt.Errorf("github.token and github.org are required when debug.use_mock is false")
+		if config.GitHub.AppID == 0 {
+			return nil, fmt.Errorf("github.app_id is required when debug.use_mock is false")
+		}
+		if config.GitHub.AppPrivateKeyPath == "" {
+			return nil, fmt.Errorf("github.app_private_key_path is required when debug.use_mock is false")
+		}
+		if config.GitHub.GetAccount() == "" {
+			return nil, fmt.Errorf("either github.org or github.user is required when debug.use_mock is false")
+		}
+		// Verify the private key file exists
+		if _, err := os.Stat(config.GitHub.AppPrivateKeyPath); err != nil {
+			return nil, fmt.Errorf("github app private key file not found at %s: %w", config.GitHub.AppPrivateKeyPath, err)
 		}
 	} else {
 		// Set dummy values for mock mode if not provided
-		if config.GitHub.Token == "" {
-			config.GitHub.Token = "mock-token"
+		if config.GitHub.AppID == 0 {
+			config.GitHub.AppID = 123456
 		}
-		if config.GitHub.Org == "" {
+		if config.GitHub.AppPrivateKeyPath == "" {
+			config.GitHub.AppPrivateKeyPath = "/mock/path/to/key.pem"
+		}
+		if config.GitHub.GetAccount() == "" {
 			config.GitHub.Org = "mock-org"
 		}
 	}

@@ -83,6 +83,9 @@ Write-Host "  Organization: $($config.organization)"
 Write-Host "  Repository: $($config.repository)"
 Write-Host "  Name: $($config.name)"
 Write-Host "  Labels: $($config.labels)"
+if ($config.runner_group) {
+    Write-Host "  Runner Group: $($config.runner_group)"
+}
 
 Write-Host ""
 Write-Host "Step 3: Creating Startup Script..."
@@ -144,6 +147,12 @@ if (`$config.repository) {
     "--ephemeral",
     "--disableupdate"
 )
+
+# Add runner group if specified (org-level runners only)
+if (`$config.runner_group -and -not `$config.repository) {
+    `$configArgs += @("--runnergroup", `$config.runner_group)
+    Write-Host "Using runner group: `$(`$config.runner_group)"
+}
 
 & .\config.cmd @configArgs
 

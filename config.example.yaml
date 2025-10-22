@@ -1,14 +1,26 @@
 # GitHub Configuration
 github:
-  # Personal Access Token for GitHub API access
-  # For repository runners: requires 'repo' scope
-  # For organization runners: requires 'admin:org' -> 'manage_runners:org' scope
-  token: ghp_xxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxx
+  # GitHub App ID (numeric ID from your GitHub App settings)
+  # More robust than PAT as tokens are short-lived and auto-refreshed
+  app_id: 123456
 
-  # GitHub Organization name
+  # Path to GitHub App private key file (PEM format)
+  # Download this from your GitHub App settings
+  app_private_key_path: C:\path\to\github-app-private-key.pem
+
+  # GitHub Account name - use EITHER "org" OR "user" (not both)
+  # For organizations: use "org"
   org: your-organization
+  # For personal accounts: use "user"
+  # user: your-github-username
+  # The app must be installed on whichever account you specify
 
-  # GitHub Repository name (leave empty for organization-level runners)
+  # GitHub Repository name
+  # For organizations: Optional. Leave empty for org-level runners, or specify a repo for repo-level runners
+  # For personal accounts: REQUIRED. Personal accounts don't support account-level runners
+  # Required permissions:
+  #   - Organization-level runners: Self-hosted runners (Read & write)
+  #   - Repository-level runners: Administration (Read & write)
   repo: your-repository
 
 # Runner Pool Configuration
@@ -20,6 +32,17 @@ runners:
   # VMs will be named as: <name_prefix>1, <name_prefix>2, etc.
   # If not specified, defaults to: "runner-"
   name_prefix: "runner-"
+
+  # Custom labels to add to runners (in addition to default labels)
+  # Default labels are: self-hosted, Windows, X64, ephemeral
+  # Example: labels: ["gpu", "high-memory"]
+  labels: []
+
+  # Runner group (organization/account-level runners only)
+  # This setting is ignored for repository-level runners
+  # If not specified, runners will be added to the "Default" group
+  # Example: runner_group: "my-runner-group"
+  runner_group: ""
 
 # Hyper-V Configuration
 hyperv:

@@ -12,6 +12,7 @@ runner-orchestrator.exe
 
 # Config files
 config.yaml
+*.pem
 
 # Test coverage
 *.out

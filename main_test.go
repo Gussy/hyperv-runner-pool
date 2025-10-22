@@ -137,12 +137,16 @@ func TestMockVMManager_RunPowerShell(t *testing.T) {
 func setupTestOrchestrator() *Orchestrator {
 	config := Config{
 		GitHub: GitHubConfig{
-			Token: "test-token",
-			Org:   "test-org",
-			Repo:  "test-repo",
+			AppID:             123456,
+			AppPrivateKeyPath: "/mock/path/to/key.pem",
+			Org:               "test-org",
+			Repo:              "test-repo",
 		},
 		Runners: RunnersConfig{
 			PoolSize: 2,
+		},
+		Debug: DebugConfig{
+			UseMock: true, // Enable mock mode for tests
 		},
 	}
 
@@ -163,11 +167,15 @@ func setupTestOrchestrator() *Orchestrator {
 func TestNewOrchestrator(t *testing.T) {
 	config := Config{
 		GitHub: GitHubConfig{
-			Token: "test-token",
-			Org:   "test-org",
+			AppID:             123456,
+			AppPrivateKeyPath: "/mock/path/to/key.pem",
+			Org:               "test-org",
 		},
 		Runners: RunnersConfig{
 			PoolSize: 4,
+		},
+		Debug: DebugConfig{
+			UseMock: true, // Enable mock mode for tests
 		},
 	}
 
@@ -182,7 +190,7 @@ func TestNewOrchestrator(t *testing.T) {
 		t.Errorf("Expected pool size %d, got %d", config.Runners.PoolSize, len(orchestrator.vmPool))
 	}
 
-	if orchestrator.config.GitHub.Token != config.GitHub.Token {
+	if orchestrator.config.GitHub.AppID != config.GitHub.AppID {
 		t.Error("Config not properly set")
 	}
 }
@@ -321,12 +329,16 @@ func TestConcurrentVMOperations(t *testing.T) {
 func TestOrchestratorInitializePool(t *testing.T) {
 	config := Config{
 		GitHub: GitHubConfig{
-			Token: "test-token",
-			Org:   "test-org",
-			Repo:  "test-repo",
+			AppID:             123456,
+			AppPrivateKeyPath: "/mock/path/to/key.pem",
+			Org:               "test-org",
+			Repo:              "test-repo",
 		},
 		Runners: RunnersConfig{
 			PoolSize: 2,
+		},
+		Debug: DebugConfig{
+			UseMock: true, // Enable mock mode for tests
 		},
 	}
 
