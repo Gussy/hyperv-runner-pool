@@ -28,6 +28,7 @@ coverage.html
 # Build artifacts
 dist/
 build/
+*~
 
 # GoReleaser
 .goreleaser.yml.snap

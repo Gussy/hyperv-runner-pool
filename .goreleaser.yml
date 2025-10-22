@@ -8,7 +8,7 @@ before:
 
 builds:
   - id: windows-amd64
-    main: ./main.go
+    main: ./cmd/hyperv-runner-pool
     binary: hyperv-runner-pool
     goos:
       - windows
