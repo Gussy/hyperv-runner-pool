@@ -798,6 +798,10 @@ This project uses **Hyper-V differencing disks** (child/parent VHDX architecture
   - **85% faster** pool startup
 - **Job Pickup Time**: < 5 seconds (warm pool ready)
 
+### Known Performance Limitations
+
+- **Runner Installation Time**: ~3 minutes per VM due to downloading GitHub Actions runner package (~100-200 MB) during VM startup. This can be eliminated by pre-installing the runner in the Packer template.
+
 ### Storage Efficiency
 
 - **Per-VM Storage**: 2-5 GB (child disk stores only changes)
