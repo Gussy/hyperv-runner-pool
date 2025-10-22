@@ -1,6 +1,6 @@
 # Configure GitHub Actions Runner
 # This script is injected and executed by the orchestrator after VM creation
-# It downloads, installs, configures the runner and creates a scheduled task for automatic startup
+# It downloads, installs, configures, and runs the ephemeral runner directly
 
 $ErrorActionPreference = "Stop"
 
@@ -68,6 +68,9 @@ if (-not (Test-Path "$runnerPath\config.cmd")) {
     Write-Host "GitHub Actions Runner already present at $runnerPath"
 }
 
+# Change to runner directory for configuration
+Set-Location $runnerPath
+
 Write-Host ""
 Write-Host "Step 2: Reading Runner Configuration..."
 Write-Host "--------------------------------------------"
@@ -88,135 +91,73 @@ if ($config.runner_group) {
 }
 
 Write-Host ""
-Write-Host "Step 3: Creating Startup Script..."
+Write-Host "Step 3: Configuring Runner..."
 Write-Host "--------------------------------------------"
-# Create startup script that will run on each boot
-$startupScriptPath = "C:\actions-runner\startup.ps1"
-$startupScript = @"
-# GitHub Actions Runner Startup Script
-# This script runs on VM boot and registers the runner with GitHub
-
-`$ErrorActionPreference = "Stop"
-`$runnerPath = "C:\actions-runner"
-Set-Location `$runnerPath
-
-Write-Host "Starting GitHub Actions Runner configuration..."
-
-# Read runner configuration
-`$configPath = "C:\runner-config.json"
-if (-not (Test-Path `$configPath)) {
-    Write-Error "Configuration file not found at `$configPath"
-    exit 1
-}
-
-try {
-    `$configJson = Get-Content -Path `$configPath -Raw
-    `$config = `$configJson | ConvertFrom-Json
-} catch {
-    Write-Error "Failed to read configuration: `$_"
-    exit 1
-}
-
-Write-Host "Configuration loaded for runner: `$(`$config.name)"
 
 # Remove any existing runner configuration
 if (Test-Path ".runner") {
     Write-Host "Removing existing runner configuration..."
-    .\config.cmd remove --token `$(`$config.token)
+    .\config.cmd remove --token $config.token
 }
 
 # Configure runner
-Write-Host "Configuring GitHub Actions runner..."
-`$configArgs = @(
+Write-Host "Registering runner with GitHub..."
+$configArgs = @(
     "--unattended",
     "--url"
 )
 
-if (`$config.repository) {
+if ($config.repository) {
     # Repository-level runner
-    `$configArgs += "https://github.com/`$(`$config.organization)/`$(`$config.repository)"
+    $configArgs += "https://github.com/$($config.organization)/$($config.repository)"
 } else {
     # Organization-level runner
-    `$configArgs += "https://github.com/`$(`$config.organization)"
+    $configArgs += "https://github.com/$($config.organization)"
 }
 
-`$configArgs += @(
-    "--token", `$config.token,
-    "--name", `$config.name,
-    "--labels", `$config.labels,
+$configArgs += @(
+    "--token", $config.token,
+    "--name", $config.name,
+    "--labels", $config.labels,
     "--ephemeral",
     "--disableupdate"
 )
 
 # Add runner group if specified (org-level runners only)
-if (`$config.runner_group -and -not `$config.repository) {
-    `$configArgs += @("--runnergroup", `$config.runner_group)
-    Write-Host "Using runner group: `$(`$config.runner_group)"
+if ($config.runner_group -and -not $config.repository) {
+    $configArgs += @("--runnergroup", $config.runner_group)
+    Write-Host "Using runner group: $($config.runner_group)"
 }
 
 & .\config.cmd @configArgs
 
-if (`$LASTEXITCODE -ne 0) {
-    Write-Error "Failed to configure runner (exit code: `$LASTEXITCODE)"
-    exit 1
+if ($LASTEXITCODE -ne 0) {
+    throw "Failed to configure runner (exit code: $LASTEXITCODE)"
 }
 
 Write-Host "Runner configured successfully!"
 
+Write-Host ""
+Write-Host "Step 4: Starting Runner..."
+Write-Host "--------------------------------------------"
+Write-Host "Running in ephemeral single-job mode..."
+Write-Host "Runner will wait for a job, execute it, then exit."
+Write-Host ""
+
 # Run the runner (this will block until job completes)
 # Using --once flag to run a single job then exit
-Write-Host "Starting runner (single job mode)..."
 & .\run.cmd --once
 
-# When runner completes, shutdown the VM
-# The orchestrator will detect the shutdown and recreate the VM
-Write-Host "Job completed. Shutting down VM..."
-Start-Sleep -Seconds 5
+Write-Host ""
+Write-Host "=========================================="
+Write-Host "Job Complete - Shutting Down"
+Write-Host "=========================================="
+Write-Host "Runner has completed its job and will shut down."
+Write-Host "The orchestrator will detect this and recreate the VM."
+Write-Host ""
+
+# Give a brief moment for any final cleanup
+Start-Sleep -Seconds 2
+
+# Shutdown the VM - orchestrator will recreate it
 Stop-Computer -Force
-"@
-
-# Write startup script
-Set-Content -Path $startupScriptPath -Value $startupScript -Force -Encoding UTF8
-Write-Host "Startup script created at $startupScriptPath"
-
-Write-Host ""
-Write-Host "Step 4: Creating Scheduled Task..."
-Write-Host "--------------------------------------------"
-
-# Remove existing task if present
-$existingTask = Get-ScheduledTask -TaskName "GitHubActionsRunner" -ErrorAction SilentlyContinue
-if ($existingTask) {
-    Write-Host "Removing existing scheduled task..."
-    Unregister-ScheduledTask -TaskName "GitHubActionsRunner" -Confirm:$false
-}
-
-# Create task components
-$action = New-ScheduledTaskAction -Execute "powershell.exe" -Argument "-ExecutionPolicy Bypass -NoProfile -File `"$startupScriptPath`""
-$trigger = New-ScheduledTaskTrigger -AtStartup
-$principal = New-ScheduledTaskPrincipal -UserId "SYSTEM" -LogonType ServiceAccount -RunLevel Highest
-$settings = New-ScheduledTaskSettingsSet -AllowStartIfOnBatteries -DontStopIfGoingOnBatteries -StartWhenAvailable
-
-# Register the task
-$task = Register-ScheduledTask -TaskName "GitHubActionsRunner" -Action $action -Trigger $trigger -Principal $principal -Settings $settings -Force
-
-# Verify task was created
-$task = Get-ScheduledTask -TaskName "GitHubActionsRunner" -ErrorAction Stop
-Write-Host "Scheduled task created successfully:"
-Write-Host "  Name: $($task.TaskName)"
-Write-Host "  State: $($task.State)"
-Write-Host "  Trigger: At Startup"
-Write-Host "  User: SYSTEM"
-
-Write-Host ""
-Write-Host "Step 5: Starting Runner..."
-Write-Host "--------------------------------------------"
-Write-Host "Starting runner task for first execution..."
-Start-ScheduledTask -TaskName "GitHubActionsRunner"
-
-Write-Host ""
-Write-Host "=========================================="
-Write-Host "Setup Complete!"
-Write-Host "=========================================="
-Write-Host "The runner is now starting and will register with GitHub."
-Write-Host "After the first job completes, the VM will shut down automatically."
-Write-Host "The orchestrator will detect this and recreate the VM for the next job."
