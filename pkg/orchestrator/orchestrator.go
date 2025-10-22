@@ -47,8 +47,15 @@ func (o *Orchestrator) InitializePool() error {
 	}
 
 	o.logger.Info("Performing startup cleanup", "name_prefix", namePrefix)
+
+	// Cleanup VMs and VHDXs
 	if err := o.vmManager.CleanupLeftoverResources(namePrefix); err != nil {
-		o.logger.Warn("Cleanup encountered errors (continuing anyway)", "error", err)
+		o.logger.Warn("VM cleanup encountered errors (continuing anyway)", "error", err)
+	}
+
+	// Cleanup offline runners from GitHub
+	if err := o.cleanupOfflineRunners(namePrefix); err != nil {
+		o.logger.Warn("GitHub runner cleanup encountered errors (continuing anyway)", "error", err)
 	}
 
 	o.logger.Info("Initializing warm pool of VMs", "pool_size", o.config.Runners.PoolSize)
@@ -163,6 +170,13 @@ func (o *Orchestrator) Shutdown() error {
 		namePrefix = "runner-"
 	}
 
+	// Cleanup offline runners from GitHub first (before destroying VMs)
+	// This ensures we remove any stale offline runners
+	if err := o.cleanupOfflineRunners(namePrefix); err != nil {
+		o.logger.Warn("GitHub runner cleanup encountered errors during shutdown (continuing)", "error", err)
+		// Don't fail shutdown due to GitHub API errors
+	}
+
 	// Cleanup all VMs
 	if err := o.vmManager.CleanupLeftoverResources(namePrefix); err != nil {
 		o.logger.Warn("Errors during shutdown cleanup", "error", err)
@@ -170,5 +184,71 @@ func (o *Orchestrator) Shutdown() error {
 	}
 
 	o.logger.Info("Orchestrator shutdown complete")
+	return nil
+}
+
+// cleanupOfflineRunners removes offline runners from GitHub that match the name prefix
+func (o *Orchestrator) cleanupOfflineRunners(namePrefix string) error {
+	o.logger.Info("Checking for offline runners in GitHub", "name_prefix", namePrefix)
+
+	// List all runners from GitHub
+	runners, err := o.githubClient.ListRunners()
+	if err != nil {
+		return fmt.Errorf("failed to list runners: %w", err)
+	}
+
+	if len(runners) == 0 {
+		o.logger.Debug("No runners found in GitHub")
+		return nil
+	}
+
+	o.logger.Debug("Found runners in GitHub", "count", len(runners))
+
+	// Find offline runners matching our name prefix
+	var toRemove []github.RunnerInfo
+	for _, runner := range runners {
+		// Check if runner name matches our prefix pattern (e.g., "windows-latest-1", "windows-latest-2")
+		// Use simple prefix match + digit check
+		if len(runner.Name) > len(namePrefix) &&
+			runner.Name[:len(namePrefix)] == namePrefix &&
+			runner.Status == "offline" {
+			// Verify the suffix is digits (to match our pool naming pattern)
+			suffix := runner.Name[len(namePrefix):]
+			isDigitsOnly := true
+			for _, ch := range suffix {
+				if ch < '0' || ch > '9' {
+					isDigitsOnly = false
+					break
+				}
+			}
+
+			if isDigitsOnly {
+				toRemove = append(toRemove, runner)
+			}
+		}
+	}
+
+	if len(toRemove) == 0 {
+		o.logger.Info("No offline runners to remove")
+		return nil
+	}
+
+	o.logger.Info("Removing offline runners from GitHub", "count", len(toRemove))
+
+	// Remove each offline runner
+	var errors []error
+	for _, runner := range toRemove {
+		o.logger.Info("Removing offline runner", "runner_name", runner.Name, "runner_id", runner.ID)
+		if err := o.githubClient.RemoveRunner(runner.ID, runner.Name); err != nil {
+			o.logger.Warn("Failed to remove runner", "runner_name", runner.Name, "error", err)
+			errors = append(errors, fmt.Errorf("failed to remove %s: %w", runner.Name, err))
+		}
+	}
+
+	if len(errors) > 0 {
+		return fmt.Errorf("encountered %d errors removing runners", len(errors))
+	}
+
+	o.logger.Info("Successfully removed offline runners from GitHub", "count", len(toRemove))
 	return nil
 }
