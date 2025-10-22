@@ -84,11 +84,20 @@ func (o *Orchestrator) InitializePool() error {
 	wg.Wait()
 	close(errChan)
 
-	// Check for errors
+	// Collect all errors
+	var errors []error
 	for err := range errChan {
 		if err != nil {
-			return err
+			errors = append(errors, err)
 		}
+	}
+
+	// Return combined error if any occurred
+	if len(errors) > 0 {
+		for _, err := range errors {
+			o.logger.Error("VM initialization failed", "error", err)
+		}
+		return fmt.Errorf("failed to initialize %d VMs: %v", len(errors), errors)
 	}
 
 	o.logger.Info("Warm pool initialized successfully")

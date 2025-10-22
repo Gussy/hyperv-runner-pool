@@ -33,11 +33,14 @@ func (h *HyperVManager) CreateVM(slot *VMSlot) error {
 	vmName := slot.Name
 	vhdxPath := fmt.Sprintf("%s\\%s.vhdx", h.config.HyperV.VMStoragePath, vmName)
 
+	h.logger.Info("Starting VM creation", "vm_name", vmName)
+
 	// Create differencing disk (child VHDX) referencing the parent template
 	// This is much faster than copying the entire VHDX (~1s vs 15s) and uses less storage
 	// The child disk only stores changes from the parent template
 	// NOTE: Parent template must be read-only to prevent corruption of child disks
 	//       Run: Set-ItemProperty -Path "template.vhdx" -Name IsReadOnly -Value $true
+	h.logger.Debug("Creating differencing disk", "vm_name", vmName)
 	createDiffCmd := fmt.Sprintf(
 		`New-VHD -ParentPath "%s" -Path "%s" -Differencing`,
 		h.config.HyperV.TemplatePath,
@@ -46,6 +49,7 @@ func (h *HyperVManager) CreateVM(slot *VMSlot) error {
 	if _, err := h.RunPowerShell(createDiffCmd); err != nil {
 		return fmt.Errorf("failed to create differencing disk: %w", err)
 	}
+	h.logger.Debug("Differencing disk created", "vm_name", vmName)
 
 	// Inject runner config into VHDX (before creating VM)
 	// Build labels: start with defaults, then add custom labels
@@ -62,11 +66,14 @@ func (h *HyperVManager) CreateVM(slot *VMSlot) error {
 		RunnerGroup:  h.config.Runners.RunnerGroup,
 	}
 
+	h.logger.Debug("Injecting runner config", "vm_name", vmName)
 	if err := h.InjectConfig(vhdxPath, runnerConfig); err != nil {
 		return fmt.Errorf("failed to inject config: %w", err)
 	}
+	h.logger.Debug("Runner config injected", "vm_name", vmName)
 
 	// Create VM
+	h.logger.Debug("Creating VM in Hyper-V", "vm_name", vmName)
 	createCmd := fmt.Sprintf(`
 		New-VM -Name "%s" -MemoryStartupBytes 2GB -Generation 2 -VHDPath "%s"
 		Set-VM -Name "%s" -ProcessorCount 2
@@ -80,8 +87,10 @@ func (h *HyperVManager) CreateVM(slot *VMSlot) error {
 	if _, err := h.RunPowerShell(createCmd); err != nil {
 		return fmt.Errorf("failed to create VM: %w", err)
 	}
+	h.logger.Debug("VM created in Hyper-V", "vm_name", vmName)
 
 	// Start VM
+	h.logger.Debug("Starting VM", "vm_name", vmName)
 	startCmd := fmt.Sprintf(`Start-VM -Name "%s"`, vmName)
 	if _, err := h.RunPowerShell(startCmd); err != nil {
 		return fmt.Errorf("failed to start VM: %w", err)
@@ -92,6 +101,7 @@ func (h *HyperVManager) CreateVM(slot *VMSlot) error {
 
 	// Execute the embedded configure-runner script in the VM
 	// This will set up the scheduled task and start the runner
+	h.logger.Debug("Executing configure script in VM", "vm_name", vmName)
 	if err := h.ExecuteScriptInVM(vmName, configureRunnerScript); err != nil {
 		return fmt.Errorf("failed to configure runner in VM: %w", err)
 	}
@@ -221,7 +231,8 @@ func (h *HyperVManager) InjectConfig(vhdxPath string, config RunnerConfig) error
 	h.logger.Debug("Config JSON created", "size_bytes", len(configJSON))
 
 	// Write JSON to a temporary file first to avoid command line length/escaping issues
-	tempFile := fmt.Sprintf("%s\\runner-config-temp.json", os.TempDir())
+	// Use VM-specific name to avoid race conditions when creating multiple VMs in parallel
+	tempFile := fmt.Sprintf("%s\\runner-config-%s.json", os.TempDir(), config.Name)
 	if err := os.WriteFile(tempFile, configJSON, 0644); err != nil {
 		return fmt.Errorf("failed to write temp config file: %w", err)
 	}
