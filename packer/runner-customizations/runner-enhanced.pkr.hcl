@@ -77,13 +77,21 @@ build {
     restart_timeout = "1h"
   }
 
-  # CUSTOM: Install enhanced development toolchain
+  # Install enhanced development toolchain
   provisioner "powershell" {
     elevated_password = local.elevated_password
     elevated_user     = local.elevated_user
     script            = "./runner-customizations/provisioners/install-enhanced-tools.ps1"
   }
 
+  # Pre-warm GitHub Actions Runner
+  # Downloads and installs runner binaries, triggers .NET initialization and NGEN compilation
+  # This reduces first-run overhead from ~3 minutes to ~10 seconds
+  provisioner "powershell" {
+    elevated_password = local.elevated_password
+    elevated_user     = local.elevated_user
+    script            = "./runner-customizations/provisioners/prewarm-runner.ps1"
+  }
 
   # Sysprep configuration
   provisioner "file" {
