@@ -111,20 +111,13 @@ try {
     $task = Register-ScheduledTask -TaskName "GitHubActionsRunner" -Action $action -Trigger $trigger -Principal $principal -Settings $settings -Force
     Write-Host "Scheduled task 'GitHubActionsRunner' created successfully"
 
-    # Disable the task initially (will be enabled on first boot by the orchestrator)
-    Write-Host "Disabling scheduled task (will be enabled on VM deployment)..."
-    try {
-        Disable-ScheduledTask -TaskName "GitHubActionsRunner" -ErrorAction Stop
-        Write-Host "Scheduled task disabled successfully"
-    } catch {
-        Write-Warning "Failed to disable scheduled task: $_"
-        # This is not critical, continue
-    }
-
-    # Verify scheduled task
+    # Verify scheduled task is enabled (it should be by default)
     $task = Get-ScheduledTask -TaskName "GitHubActionsRunner" -ErrorAction SilentlyContinue
     if ($task) {
         Write-Host "Scheduled task verified: $($task.TaskName) - State: $($task.State)"
+        if ($task.State -ne "Ready") {
+            Write-Warning "Task state is $($task.State) instead of Ready. This may cause issues."
+        }
     } else {
         throw "Scheduled task verification failed"
     }
