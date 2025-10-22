@@ -95,4 +95,13 @@ build {
   provisioner "powershell" {
     inline = local.sysprep_commands
   }
+
+  # Set the output VHDX to read-only to protect it when used as a parent for differencing disks
+  # This prevents accidental modification which would corrupt all child disks
+  post-processor "shell-local" {
+    inline = [
+      "powershell.exe -Command \"Set-ItemProperty -Path '${var.output_directory}\\Virtual Hard Disks\\${var.vm_name}.vhdx' -Name IsReadOnly -Value $true\"",
+      "powershell.exe -Command \"Write-Output 'Template VHDX set to read-only for use as differencing disk parent'\""
+    ]
+  }
 }
