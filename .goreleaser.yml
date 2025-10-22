@@ -1,5 +1,7 @@
 version: 2
 
+dist: dist
+
 before:
   hooks:
     # Ensure dependencies are up to date
@@ -8,7 +10,7 @@ before:
 
 builds:
   - id: windows-amd64
-    main: ./cmd/hyperv-runner-pool
+    main: ./cmd/hyperv-runner-pool/
     binary: hyperv-runner-pool
     goos:
       - windows
@@ -26,6 +28,7 @@ builds:
 
 archives:
   - id: default
+    format: zip
     name_template: >-
       {{ .ProjectName }}_
       {{- .Version }}_
@@ -33,11 +36,10 @@ archives:
       {{- .Arch }}
     files:
       # Include configuration and script files
-      - .env.example
+      - config.example.yaml
       - start.ps1
       - README.md
-      # Include all Packer files
-      - packer/**/*
+      - LICENSE
 
 checksum:
   name_template: 'checksums.txt'
@@ -102,8 +104,8 @@ release:
     cd hyperv-runner-pool_{{.Version}}_windows_amd64
 
     # Configure environment
-    Copy-Item .env.example .env
-    notepad .env  # Fill in your values
+    Copy-Item config.example.yaml config.yaml
+    notepad config.yaml  # Fill in your values
 
     # Run
     .\start.ps1

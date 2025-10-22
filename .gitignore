@@ -1,10 +1,8 @@
 .notes/
 
 # Go binaries
-hyperv-runner-pool
-hyperv-runner-pool.exe
-runner-orchestrator
-runner-orchestrator.exe
+/hyperv-runner-pool
+/hyperv-runner-pool.exe
 *.exe
 *.dll
 *.so
