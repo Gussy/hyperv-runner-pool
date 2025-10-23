@@ -75,35 +75,42 @@ func main() {
 			// Create GitHub client
 			ghClient := github.NewClient(*cfg, log)
 
+			// Log cache configuration if set
+			if cfg.Runners.CacheURL != "" {
+				log.Info("Custom cache server configured",
+					"cache_url", cfg.Runners.CacheURL)
+				log.Info("Runners will be automatically patched to use the custom cache server")
+			}
+
 			// Create orchestrator
 			orch := orchestrator.New(*cfg, vmMgr, ghClient, log)
 
-				// Initialize VM pool
+			// Initialize VM pool
 			log.Info("Initializing VM pool...")
-				if err := orch.InitializePool(); err != nil {
-					log.Error("Failed to initialize pool", "error", err)
-					log.Warn("Some VMs may not be ready, but continuing to run. Press Ctrl+C to shutdown.")
-				} else {
-					log.Info("Pool initialized successfully")
-				}
+			if err := orch.InitializePool(); err != nil {
+				log.Error("Failed to initialize pool", "error", err)
+				log.Warn("Some VMs may not be ready, but continuing to run. Press Ctrl+C to shutdown.")
+			} else {
+				log.Info("Pool initialized successfully")
+			}
 
-				log.Info("Press Ctrl+C to shutdown gracefully")
+			log.Info("Press Ctrl+C to shutdown gracefully")
 
-				// Setup signal handling for graceful shutdown
-				sigChan := make(chan os.Signal, 1)
-				signal.Notify(sigChan, os.Interrupt, syscall.SIGTERM)
+			// Setup signal handling for graceful shutdown
+			sigChan := make(chan os.Signal, 1)
+			signal.Notify(sigChan, os.Interrupt, syscall.SIGTERM)
 
-				// Wait for shutdown signal
-				sig := <-sigChan
-				log.Info("Received shutdown signal", "signal", sig.String())
+			// Wait for shutdown signal
+			sig := <-sigChan
+			log.Info("Received shutdown signal", "signal", sig.String())
 
-				// Perform graceful shutdown
-				if err := orch.Shutdown(); err != nil {
-					log.Error("Error during shutdown", "error", err)
-					return err
-				}
+			// Perform graceful shutdown
+			if err := orch.Shutdown(); err != nil {
+				log.Error("Error during shutdown", "error", err)
+				return err
+			}
 
-				log.Info("Shutdown complete")
+			log.Info("Shutdown complete")
 
 			// Close log file to ensure all data is flushed
 			logger.Close()

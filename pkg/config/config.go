@@ -4,6 +4,7 @@ import (
 	"fmt"
 	"os"
 	"path/filepath"
+	"strings"
 
 	"gopkg.in/yaml.v3"
 )
@@ -39,6 +40,7 @@ type RunnersConfig struct {
 	NamePrefix  string   `yaml:"name_prefix"`
 	Labels      []string `yaml:"labels"`       // Custom labels to add to runners
 	RunnerGroup string   `yaml:"runner_group"` // Runner group (org-level runners only)
+	CacheURL    string   `yaml:"cache_url"`    // Optional: URL to custom cache server (must end with /)
 }
 
 // HyperVConfig holds Hyper-V specific configuration
@@ -103,18 +105,21 @@ func LoadFromFile(path string) (*Config, error) {
 	}
 
 	// Get current working directory for default paths
-	if config.HyperV.TemplatePath == "" || config.HyperV.VMStoragePath == "" {
-		cwd, err := os.Getwd()
-		if err != nil {
-			return nil, fmt.Errorf("failed to get current directory: %w", err)
-		}
+	cwd, err := os.Getwd()
+	if err != nil {
+		return nil, fmt.Errorf("failed to get current directory: %w", err)
+	}
 
-		if config.HyperV.TemplatePath == "" {
-			config.HyperV.TemplatePath = fmt.Sprintf(`%s\vms\templates\runner-template.vhdx`, cwd)
-		}
-		if config.HyperV.VMStoragePath == "" {
-			config.HyperV.VMStoragePath = fmt.Sprintf(`%s\vms\storage`, cwd)
-		}
+	if config.HyperV.TemplatePath == "" {
+		config.HyperV.TemplatePath = fmt.Sprintf(`%s\vms\templates\runner-template.vhdx`, cwd)
+	}
+	if config.HyperV.VMStoragePath == "" {
+		config.HyperV.VMStoragePath = fmt.Sprintf(`%s\vms\storage`, cwd)
+	}
+
+	// Validate cache URL if provided
+	if config.Runners.CacheURL != "" && !strings.HasSuffix(config.Runners.CacheURL, "/") {
+		return nil, fmt.Errorf("runners.cache_url must end with a trailing slash")
 	}
 
 	// Validate required fields (unless in mock mode)

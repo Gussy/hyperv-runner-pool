@@ -66,6 +66,12 @@ func (h *HyperVManager) CreateVM(slot *VMSlot) error {
 		RunnerGroup:  h.config.Runners.RunnerGroup,
 	}
 
+	// Add cache URL if configured
+	if h.config.Runners.CacheURL != "" {
+		runnerConfig.CacheURL = h.config.Runners.CacheURL
+		h.logger.Debug("Cache URL configured", "cache_url", h.config.Runners.CacheURL)
+	}
+
 	h.logger.Debug("Injecting runner config", "vm_name", vmName)
 	if err := h.InjectConfig(vhdxPath, runnerConfig); err != nil {
 		return fmt.Errorf("failed to inject config: %w", err)

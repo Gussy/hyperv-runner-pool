@@ -89,6 +89,9 @@ Write-Host "  Labels: $($config.labels)"
 if ($config.runner_group) {
     Write-Host "  Runner Group: $($config.runner_group)"
 }
+if ($config.cache_url) {
+    Write-Host "  Cache URL: $($config.cache_url)"
+}
 
 Write-Host ""
 Write-Host "Step 3: Configuring Runner..."
@@ -142,6 +145,67 @@ Write-Host "Step 4: Starting Runner..."
 Write-Host "--------------------------------------------"
 Write-Host "Running in ephemeral single-job mode..."
 Write-Host "Runner will wait for a job, execute it, then exit."
+
+# Patch runner for custom cache server if URL is provided
+if ($config.cache_url) {
+    Write-Host ""
+    Write-Host "Configuring custom cache server..."
+    Write-Host "  Cache URL: $($config.cache_url)"
+
+    # Patch the runner binary to use custom cache server
+    # GitHub's runner doesn't natively support custom ACTIONS_RESULTS_URL,
+    # so we need to patch the Runner.Worker.dll binary
+    #
+    # This replaces the string "ACTIONS_RESULTS_URL" with "ACTIONS_RESULTS_ORL"
+    # in the binary, which allows us to use CUSTOM_ACTIONS_RESULTS_URL env var
+    # See: https://gha-cache-server.falcondev.io/getting-started
+
+    $workerDllPath = "$runnerPath\bin\Runner.Worker.dll"
+
+    if (Test-Path $workerDllPath) {
+        Write-Host "  Patching runner binary for custom cache server..."
+
+        try {
+            # Read the binary file
+            $bytes = [System.IO.File]::ReadAllBytes($workerDllPath)
+
+            # Convert to string for pattern matching (using ASCII encoding)
+            $content = [System.Text.Encoding]::ASCII.GetString($bytes)
+
+            # Replace ACTIONS_RESULTS_URL with ACTIONS_RESULTS_ORL
+            # This effectively disables the hardcoded URL check
+            $oldPattern = "ACTIONS_RESULTS_URL"
+            $newPattern = "ACTIONS_RESULTS_ORL"
+
+            if ($content.Contains($oldPattern)) {
+                $content = $content.Replace($oldPattern, $newPattern)
+
+                # Convert back to bytes
+                $patchedBytes = [System.Text.Encoding]::ASCII.GetBytes($content)
+
+                # Write patched binary
+                [System.IO.File]::WriteAllBytes($workerDllPath, $patchedBytes)
+
+                Write-Host "  Runner binary patched successfully"
+
+                # Now set the custom cache URL environment variable
+                $env:CUSTOM_ACTIONS_RESULTS_URL = $config.cache_url
+                Write-Host "  Custom cache server URL set: $($config.cache_url)"
+            } else {
+                Write-Host "  Runner appears to be already patched or incompatible"
+                Write-Host "  Attempting to use cache server anyway..."
+                $env:CUSTOM_ACTIONS_RESULTS_URL = $config.cache_url
+            }
+        } catch {
+            Write-Host "  WARNING: Failed to patch runner binary: $_"
+            Write-Host "  Cache server may not work correctly"
+        }
+    } else {
+        Write-Host "  WARNING: Runner.Worker.dll not found at $workerDllPath"
+        Write-Host "  Skipping runner patching"
+    }
+}
+
 Write-Host ""
 
 # Run the runner (this will block until job completes)

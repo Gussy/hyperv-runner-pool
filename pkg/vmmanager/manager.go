@@ -23,6 +23,7 @@ type RunnerConfig struct {
 	Name         string `json:"name"`
 	Labels       string `json:"labels"`
 	RunnerGroup  string `json:"runner_group,omitempty"` // Optional: for org-level runners only
+	CacheURL     string `json:"cache_url,omitempty"`     // Optional: URL to local cache server
 }
 
 // VMState represents the lifecycle state of a VM

@@ -44,6 +44,21 @@ runners:
   # Example: runner_group: "my-runner-group"
   runner_group: ""
 
+  # Custom cache server URL (optional)
+  # When set, runners will be automatically patched to use your self-hosted cache server
+  # instead of GitHub's remote cache. This dramatically speeds up workflows using
+  # actions/cache by keeping cache on your local network.
+  #
+  # Requires: A cache server running on your LAN (e.g., github-actions-cache-server)
+  # See: https://gha-cache-server.falcondev.io/getting-started
+  #
+  # MUST end with a trailing slash (/)
+  # Example: "http://192.168.1.100:8080/"
+  #
+  # The runner will be automatically patched to use this URL instead of GitHub's
+  # cache service. This is done by modifying the Runner.Worker.dll binary.
+  cache_url: ""
+
 # Hyper-V Configuration
 hyperv:
   # Path to the VM template VHDX file
