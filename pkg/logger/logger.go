@@ -10,6 +10,8 @@ import (
 	"time"
 )
 
+var logFileHandle *os.File
+
 // Setup creates and configures the application logger
 func Setup(logLevel, logFormat, logDirectory string) *slog.Logger {
 	// Parse log level
@@ -42,7 +44,9 @@ func Setup(logLevel, logFormat, logDirectory string) *slog.Logger {
 			// Log error to stdout but continue with stdout-only logging
 			fmt.Fprintf(os.Stderr, "Warning: Failed to open log file: %v\n", err)
 		} else {
-			writers = append(writers, logFile)
+			logFileHandle = logFile
+			// Wrap the file in a syncing writer that flushes after every write
+			writers = append(writers, &syncWriter{file: logFile})
 		}
 	}
 
@@ -60,6 +64,32 @@ func Setup(logLevel, logFormat, logDirectory string) *slog.Logger {
 	}
 
 	return slog.New(handler)
+}
+
+// syncWriter wraps a file and syncs after every write to ensure data is flushed
+type syncWriter struct {
+	file *os.File
+}
+
+func (sw *syncWriter) Write(p []byte) (n int, err error) {
+	n, err = sw.file.Write(p)
+	if err != nil {
+		return n, err
+	}
+	// Sync after every write to ensure logs are flushed immediately
+	// This is important for GUI apps where stdout is not connected
+	if syncErr := sw.file.Sync(); syncErr != nil {
+		return n, syncErr
+	}
+	return n, nil
+}
+
+// Close closes the log file handle if it's open
+func Close() error {
+	if logFileHandle != nil {
+		return logFileHandle.Close()
+	}
+	return nil
 }
 
 // openDailyLogFile creates or opens the log file for the current date

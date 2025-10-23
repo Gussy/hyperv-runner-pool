@@ -17,12 +17,11 @@ builds:
     goarch:
       - amd64
     env:
-      - CGO_ENABLED=1
+      - CGO_ENABLED=0
     flags:
       - -trimpath
     ldflags:
       - -s -w
-      - -H=windowsgui
       - -X main.version={{.Version}}
       - -X main.commit={{.Commit}}
       - -X main.date={{.Date}}

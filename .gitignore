@@ -27,6 +27,7 @@ coverage.html
 dist/
 build/
 *~
+*.log
 
 # GoReleaser
 .goreleaser.yml.snap

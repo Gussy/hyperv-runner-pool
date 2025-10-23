@@ -14,16 +14,16 @@ tasks:
   build:
     desc: Build Windows binary
     env:
-      CGO_ENABLED: "1"
+      CGO_ENABLED: "0"
     cmds:
-      - GOOS=windows GOARCH=amd64 go build -ldflags "-H=windowsgui" -o {{.BINARY_NAME}}.exe ./cmd/hyperv-runner-pool
+      - GOOS=windows GOARCH=amd64 go build -o {{.BINARY_NAME}}.exe ./cmd/hyperv-runner-pool
 
   build-local:
     desc: Build for current OS
     env:
-      CGO_ENABLED: "1"
+      CGO_ENABLED: "0"
     cmds:
-      - go build -ldflags "-H=windowsgui" -o {{.BINARY_NAME}} ./cmd/hyperv-runner-pool
+      - go build -o {{.BINARY_NAME}} ./cmd/hyperv-runner-pool
 
   test:
     desc: Run unit tests (mock VM manager, orchestrator, concurrent operations)
