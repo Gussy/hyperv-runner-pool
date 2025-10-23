@@ -5,6 +5,7 @@ import (
 	"os"
 	"os/exec"
 	"strings"
+	"syscall"
 	"time"
 )
 
@@ -47,7 +48,15 @@ func (h *HyperVManager) RunPowerShell(command string) (string, error) {
 	}
 
 	// Execute PowerShell with -File parameter (more robust than -Command)
-	cmd := exec.Command("powershell.exe", "-ExecutionPolicy", "Bypass", "-NoProfile", "-File", tempFile.Name())
+	// Use -WindowStyle Hidden to prevent PowerShell windows from appearing
+	cmd := exec.Command("powershell.exe", "-ExecutionPolicy", "Bypass", "-NoProfile", "-WindowStyle", "Hidden", "-File", tempFile.Name())
+
+	// On Windows, hide the console window for the PowerShell process
+	// This prevents PowerShell windows from flashing on screen
+	cmd.SysProcAttr = &syscall.SysProcAttr{
+		HideWindow:    true,
+		CreationFlags: 0x08000000, // CREATE_NO_WINDOW
+	}
 
 	// Capture stdout and stderr separately for better debugging
 	var stdout, stderr strings.Builder

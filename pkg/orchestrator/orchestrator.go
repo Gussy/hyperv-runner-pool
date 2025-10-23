@@ -164,6 +164,67 @@ func (o *Orchestrator) RecreateVM(vmName string) error {
 	return nil
 }
 
+// RestartAllVMs restarts all VMs in the pool
+func (o *Orchestrator) RestartAllVMs() error {
+	o.logger.Info("Restarting all VMs in pool", "pool_size", len(o.vmPool))
+
+	o.mu.Lock()
+	defer o.mu.Unlock()
+
+	var wg sync.WaitGroup
+	errChan := make(chan error, len(o.vmPool))
+
+	for _, slot := range o.vmPool {
+		if slot == nil {
+			continue
+		}
+
+		wg.Add(1)
+		go func(s *vmmanager.VMSlot) {
+			defer wg.Done()
+
+			o.logger.Info("Restarting VM", "vm_name", s.Name)
+
+			s.State = vmmanager.StateDestroying
+
+			// Destroy the VM
+			if err := o.vmManager.DestroyVM(s); err != nil {
+				o.logger.Warn("Error destroying VM during restart", "vm_name", s.Name, "error", err)
+				// Continue anyway to try recreation
+			}
+
+			// Recreate the VM
+			if err := o.createAndRegisterVM(s); err != nil {
+				errChan <- fmt.Errorf("failed to restart %s: %w", s.Name, err)
+				return
+			}
+
+			o.logger.Info("VM restarted successfully", "vm_name", s.Name)
+		}(slot)
+	}
+
+	wg.Wait()
+	close(errChan)
+
+	// Collect errors
+	var errors []error
+	for err := range errChan {
+		if err != nil {
+			errors = append(errors, err)
+		}
+	}
+
+	if len(errors) > 0 {
+		for _, err := range errors {
+			o.logger.Error("VM restart failed", "error", err)
+		}
+		return fmt.Errorf("failed to restart %d VMs: %v", len(errors), errors)
+	}
+
+	o.logger.Info("All VMs restarted successfully")
+	return nil
+}
+
 // Shutdown gracefully shuts down the orchestrator and cleans up all VMs
 func (o *Orchestrator) Shutdown() error {
 	o.logger.Info("Shutting down orchestrator and cleaning up VMs...")

@@ -13,6 +13,7 @@ import (
 	"hyperv-runner-pool/pkg/github"
 	"hyperv-runner-pool/pkg/logger"
 	"hyperv-runner-pool/pkg/orchestrator"
+	"hyperv-runner-pool/pkg/tray"
 	"hyperv-runner-pool/pkg/vmmanager"
 )
 
@@ -34,6 +35,11 @@ func main() {
 				Aliases:  []string{"c"},
 				Usage:    "Path to YAML configuration file",
 				Required: true,
+			},
+			&cli.BoolFlag{
+				Name:    "no-tray",
+				Usage:   "Disable system tray icon (console mode)",
+				Sources: cli.EnvVars("NO_TRAY"),
 			},
 		},
 		Action: func(ctx context.Context, cmd *cli.Command) error {
@@ -78,30 +84,68 @@ func main() {
 			// Create orchestrator
 			orch := orchestrator.New(*cfg, vmMgr, ghClient, log)
 
-			// Initialize VM pool
-			if err := orch.InitializePool(); err != nil {
-				return fmt.Errorf("failed to initialize pool: %w", err)
+			// Check if system tray is disabled
+			noTray := cmd.Bool("no-tray")
+
+			if noTray {
+				// Console mode: Initialize pool and wait for signal
+				log.Info("Orchestrator running in console mode (no system tray)")
+
+				// Initialize VM pool
+				if err := orch.InitializePool(); err != nil {
+					return fmt.Errorf("failed to initialize pool: %w", err)
+				}
+
+				log.Info("Press Ctrl+C to shutdown gracefully")
+
+				// Setup signal handling for graceful shutdown
+				sigChan := make(chan os.Signal, 1)
+				signal.Notify(sigChan, os.Interrupt, syscall.SIGTERM)
+
+				// Wait for shutdown signal
+				sig := <-sigChan
+				log.Info("Received shutdown signal", "signal", sig.String())
+
+				// Perform graceful shutdown
+				if err := orch.Shutdown(); err != nil {
+					log.Error("Error during shutdown", "error", err)
+					return err
+				}
+
+				log.Info("Shutdown complete")
+			} else {
+				// System tray mode: Initialize in background and run tray (blocking)
+				log.Info("Starting with system tray icon")
+				log.Info("Initializing VM pool in background...")
+
+				// Initialize pool in background before starting tray
+				initErr := make(chan error, 1)
+				go func() {
+					initErr <- orch.InitializePool()
+				}()
+
+				// Start system tray (blocking - must be on main goroutine)
+				// The tray will handle shutdown when user clicks Exit
+				tray.Run(tray.Config{
+					Controller: orch,
+					Logger:     log,
+					OnReady: func() {
+						// Check if pool initialization completed successfully
+						if err := <-initErr; err != nil {
+							log.Error("Failed to initialize pool", "error", err)
+							log.Info("Exiting due to initialization error")
+							return
+						}
+						log.Info("VM pool initialized successfully")
+						log.Info("System tray active - right-click icon to manage VMs or exit")
+					},
+				})
+
+				// tray.Run() blocks until systray.Quit() is called
+				// Shutdown is handled in the tray's onExit callback
+				log.Info("Shutdown complete")
 			}
 
-			// Setup signal handling for graceful shutdown
-			sigChan := make(chan os.Signal, 1)
-			signal.Notify(sigChan, os.Interrupt, syscall.SIGTERM)
-
-			// Keep the orchestrator running
-			log.Info("Orchestrator running, monitoring VMs for job completion")
-			log.Info("Press Ctrl+C to shutdown gracefully")
-
-			// Wait for shutdown signal
-			sig := <-sigChan
-			log.Info("Received shutdown signal", "signal", sig.String())
-
-			// Perform graceful shutdown
-			if err := orch.Shutdown(); err != nil {
-				log.Error("Error during shutdown", "error", err)
-				return err
-			}
-
-			log.Info("Shutdown complete")
 			return nil
 		},
 	}

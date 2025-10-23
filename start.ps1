@@ -71,7 +71,10 @@ catch {
 
 Write-Host ""
 
-Write-Host "Starting runner pool..." -ForegroundColor Green
+Write-Host "Starting runner pool with system tray icon..." -ForegroundColor Green
+Write-Host "  - Look for the icon in your Windows system tray" -ForegroundColor Cyan
+Write-Host "  - Right-click the icon to restart VMs or exit" -ForegroundColor Cyan
+Write-Host "  - To run in console mode, use: --no-tray flag" -ForegroundColor Cyan
 Write-Host ""
 
 # Start the runner pool with config file

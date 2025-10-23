@@ -218,10 +218,25 @@ notepad config.yaml
 **Run the orchestrator:**
 
 ```powershell
+# Run with system tray icon (default - hides console window)
 .\hyperv-runner-pool.exe -c config.yaml
-# or
+
+# Run in console mode (no system tray)
+.\hyperv-runner-pool.exe -c config.yaml --no-tray
+
+# Or use the convenience script
 .\start.ps1
 ```
+
+**System Tray Features:**
+
+When running with the system tray icon (default mode):
+- A tray icon appears in the Windows system tray (white server icon)
+- Right-click the icon to access the context menu:
+  - **Restart All VMs** - Destroys and recreates all VMs in the pool
+  - **Exit** - Gracefully shuts down the orchestrator and cleans up all VMs
+- The application runs in the background without a console window
+- Use `--no-tray` flag to run in console mode with Ctrl+C shutdown
 
 ## How It Works
 
@@ -290,7 +305,7 @@ notepad config.yaml
 
 ## Known Issues Limitations
 
-- **Runner Installation Time**: ~3 minutes per VM due to downloading GitHub Actions runner package (~100-200 MB) during VM startup. This can be eliminated by pre-installing the runner in the Packer template.
+- **Runner Installation Time**: ~45 seconds per VM due to downloading GitHub Actions runner package (~100-200 MB) during VM startup.
 
 ---
 
