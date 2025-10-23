@@ -79,16 +79,16 @@ func (h *HyperVManager) CreateVM(slot *VMSlot) error {
 	h.logger.Debug("Runner config injected", "vm_name", vmName)
 
 	// Create VM
-	h.logger.Debug("Creating VM in Hyper-V", "vm_name", vmName)
+	h.logger.Debug("Creating VM in Hyper-V", "vm_name", vmName, "memory_mb", h.config.HyperV.VMMemoryMB, "cpu_count", h.config.HyperV.VMCPUCount)
 	createCmd := fmt.Sprintf(`
-		New-VM -Name "%s" -MemoryStartupBytes 2GB -Generation 2 -VHDPath "%s"
-		Set-VM -Name "%s" -ProcessorCount 2
+		New-VM -Name "%s" -MemoryStartupBytes %dMB -Generation 2 -VHDPath "%s"
+		Set-VM -Name "%s" -ProcessorCount %d
 		Set-VM -Name "%s" -AutomaticStartAction Nothing
 		Set-VM -Name "%s" -AutomaticStopAction ShutDown
 		Add-VMNetworkAdapter -VMName "%s" -SwitchName "Default Switch"
 		$vmDrive = Get-VMHardDiskDrive -VMName "%s"
 		Set-VMFirmware -VMName "%s" -BootOrder $vmDrive
-	`, vmName, vhdxPath, vmName, vmName, vmName, vmName, vmName, vmName)
+	`, vmName, h.config.HyperV.VMMemoryMB, vhdxPath, vmName, h.config.HyperV.VMCPUCount, vmName, vmName, vmName, vmName, vmName)
 
 	if _, err := h.RunPowerShell(createCmd); err != nil {
 		return fmt.Errorf("failed to create VM: %w", err)

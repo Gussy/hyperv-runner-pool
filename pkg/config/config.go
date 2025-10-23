@@ -47,8 +47,10 @@ type RunnersConfig struct {
 type HyperVConfig struct {
 	TemplatePath  string `yaml:"template_path"`
 	VMStoragePath string `yaml:"storage_path"`
-	VMUsername    string `yaml:"vm_username"` // PowerShell Direct credentials
-	VMPassword    string `yaml:"vm_password"` // PowerShell Direct credentials
+	VMUsername    string `yaml:"vm_username"`   // PowerShell Direct credentials
+	VMPassword    string `yaml:"vm_password"`   // PowerShell Direct credentials
+	VMMemoryMB    int    `yaml:"vm_memory_mb"`  // VM memory in MB (default: 4096)
+	VMCPUCount    int    `yaml:"vm_cpu_count"`  // VM CPU count (default: 2)
 }
 
 // DebugConfig holds debugging and logging configuration
@@ -83,6 +85,12 @@ func LoadFromFile(path string) (*Config, error) {
 	}
 	if config.HyperV.VMPassword == "" {
 		config.HyperV.VMPassword = "password"
+	}
+	if config.HyperV.VMMemoryMB == 0 {
+		config.HyperV.VMMemoryMB = 4096
+	}
+	if config.HyperV.VMCPUCount == 0 {
+		config.HyperV.VMCPUCount = 2
 	}
 	if config.Debug.LogLevel == "" {
 		config.Debug.LogLevel = "info"

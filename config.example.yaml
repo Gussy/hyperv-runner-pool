@@ -79,6 +79,21 @@ hyperv:
   vm_username: "Administrator"
   vm_password: "password"
 
+  # VM memory in megabytes (MB)
+  # This sets the amount of RAM allocated to each VM in the pool
+  # Default: 4096 (4 GB)
+  # Recommended minimum: 4096 MB for Windows-based GitHub Actions runners
+  # Increase this if your workflows require more memory (e.g., 8192 for 8GB)
+  # Example: vm_memory_mb: 8192
+  vm_memory_mb: 4096
+
+  # VM CPU count (number of virtual processors)
+  # This sets the number of vCPUs allocated to each VM in the pool
+  # Default: 2
+  # Increase this for CPU-intensive workflows (e.g., compilation, testing)
+  # Example: vm_cpu_count: 4
+  vm_cpu_count: 2
+
 # Debug Configuration
 debug:
   # Use mock VM manager for macOS/Linux development (true/false)
