@@ -76,3 +76,10 @@ debug:
   # Log format: text, json
   # Use 'json' for structured logging in production
   log_format: text
+
+  # Log directory: path where daily log files will be written
+  # Log files are named with the current date: YYYY-MM-DD.log (e.g., 2025-10-23.log)
+  # If not specified, defaults to the directory where the executable is located
+  # Logs are written to both stdout and the log file
+  # Example: log_directory: "C:\\logs\\hyperv-runner-pool"
+  log_directory: ""

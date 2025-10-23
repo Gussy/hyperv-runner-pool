@@ -52,7 +52,7 @@ func main() {
 			}
 
 			// Setup logger with config
-			log := logger.Setup(cfg.Debug.LogLevel, cfg.Debug.LogFormat)
+			log := logger.Setup(cfg.Debug.LogLevel, cfg.Debug.LogFormat, cfg.Debug.LogDirectory)
 
 			// Print version information
 			log.Info("Starting Hyper-V Runner Pool",
@@ -93,7 +93,10 @@ func main() {
 
 				// Initialize VM pool
 				if err := orch.InitializePool(); err != nil {
-					return fmt.Errorf("failed to initialize pool: %w", err)
+					log.Error("Failed to initialize pool", "error", err)
+					log.Warn("Some VMs may not be ready, but continuing to run. Press Ctrl+C to shutdown.")
+				} else {
+					log.Info("Pool initialized successfully")
 				}
 
 				log.Info("Press Ctrl+C to shutdown gracefully")

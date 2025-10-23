@@ -3,6 +3,7 @@ package config
 import (
 	"fmt"
 	"os"
+	"path/filepath"
 
 	"gopkg.in/yaml.v3"
 )
@@ -50,9 +51,10 @@ type HyperVConfig struct {
 
 // DebugConfig holds debugging and logging configuration
 type DebugConfig struct {
-	UseMock   bool   `yaml:"use_mock"`
-	LogLevel  string `yaml:"log_level"`
-	LogFormat string `yaml:"log_format"`
+	UseMock      bool   `yaml:"use_mock"`
+	LogLevel     string `yaml:"log_level"`
+	LogFormat    string `yaml:"log_format"`
+	LogDirectory string `yaml:"log_directory"`
 }
 
 // LoadFromFile loads configuration from a YAML file
@@ -85,6 +87,19 @@ func LoadFromFile(path string) (*Config, error) {
 	}
 	if config.Debug.LogFormat == "" {
 		config.Debug.LogFormat = "text"
+	}
+	if config.Debug.LogDirectory == "" {
+		// Default to executable directory
+		exePath, err := os.Executable()
+		if err == nil {
+			config.Debug.LogDirectory = filepath.Dir(exePath)
+		} else {
+			// Fallback to current working directory
+			cwd, err := os.Getwd()
+			if err == nil {
+				config.Debug.LogDirectory = cwd
+			}
+		}
 	}
 
 	// Get current working directory for default paths
