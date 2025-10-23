@@ -286,3 +286,21 @@ func (c *Client) RemoveRunner(runnerID int64, runnerName string) error {
 
 	return nil
 }
+
+// GetRunnerByName finds a specific runner by name
+// Returns nil if runner is not found
+func (c *Client) GetRunnerByName(name string) (*RunnerInfo, error) {
+	runners, err := c.ListRunners()
+	if err != nil {
+		return nil, fmt.Errorf("failed to list runners: %w", err)
+	}
+
+	for _, runner := range runners {
+		if runner.Name == name {
+			return &runner, nil
+		}
+	}
+
+	// Runner not found
+	return nil, nil
+}

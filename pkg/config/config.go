@@ -11,10 +11,11 @@ import (
 
 // Config holds the application configuration
 type Config struct {
-	GitHub  GitHubConfig  `yaml:"github"`
-	Runners RunnersConfig `yaml:"runners"`
-	HyperV  HyperVConfig  `yaml:"hyperv"`
-	Debug   DebugConfig   `yaml:"debug"`
+	GitHub     GitHubConfig     `yaml:"github"`
+	Runners    RunnersConfig    `yaml:"runners"`
+	HyperV     HyperVConfig     `yaml:"hyperv"`
+	Monitoring MonitoringConfig `yaml:"monitoring"`
+	Debug      DebugConfig      `yaml:"debug"`
 }
 
 // GitHubConfig holds GitHub-specific configuration
@@ -51,6 +52,13 @@ type HyperVConfig struct {
 	VMPassword    string `yaml:"vm_password"`   // PowerShell Direct credentials
 	VMMemoryMB    int    `yaml:"vm_memory_mb"`  // VM memory in MB (default: 4096)
 	VMCPUCount    int    `yaml:"vm_cpu_count"`  // VM CPU count (default: 2)
+}
+
+// MonitoringConfig holds health monitoring configuration
+type MonitoringConfig struct {
+	HealthCheckIntervalSeconds int `yaml:"health_check_interval_seconds"` // How often to check health (default: 30)
+	CreationTimeoutMinutes     int `yaml:"creation_timeout_minutes"`      // Max time for VM to boot and register (default: 5)
+	GracePeriodMinutes         int `yaml:"grace_period_minutes"`          // Grace period before checking GitHub registration (default: 5)
 }
 
 // DebugConfig holds debugging and logging configuration
@@ -91,6 +99,15 @@ func LoadFromFile(path string) (*Config, error) {
 	}
 	if config.HyperV.VMCPUCount == 0 {
 		config.HyperV.VMCPUCount = 2
+	}
+	if config.Monitoring.HealthCheckIntervalSeconds == 0 {
+		config.Monitoring.HealthCheckIntervalSeconds = 30
+	}
+	if config.Monitoring.CreationTimeoutMinutes == 0 {
+		config.Monitoring.CreationTimeoutMinutes = 5
+	}
+	if config.Monitoring.GracePeriodMinutes == 0 {
+		config.Monitoring.GracePeriodMinutes = 5
 	}
 	if config.Debug.LogLevel == "" {
 		config.Debug.LogLevel = "info"

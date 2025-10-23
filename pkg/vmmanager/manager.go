@@ -2,6 +2,7 @@ package vmmanager
 
 import (
 	"sync"
+	"time"
 )
 
 // VMManager is the interface for VM operations
@@ -39,9 +40,12 @@ const (
 
 // VMSlot represents a slot in the VM pool
 type VMSlot struct {
-	Name        string
-	State       VMState
-	RunnerToken string
-	JobID       int64
-	mu          sync.Mutex
+	Name               string
+	State              VMState
+	RunnerToken        string
+	JobID              int64
+	CreatedAt          time.Time // When VM creation started
+	LastHealthCheck    time.Time // Last successful health check
+	HealthCheckFailures int       // Consecutive health check failures
+	mu                 sync.Mutex
 }

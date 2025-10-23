@@ -59,6 +59,29 @@ runners:
   # cache service. This is done by modifying the Runner.Worker.dll binary.
   cache_url: ""
 
+# Health Monitoring Configuration
+monitoring:
+  # How often to check runner health (in seconds)
+  # Default: 30 seconds
+  # Increase this to reduce GitHub API calls, decrease for faster failure detection
+  # Example: health_check_interval_seconds: 60
+  health_check_interval_seconds: 30
+
+  # Maximum time to wait for a VM to boot and register with GitHub (in minutes)
+  # If a VM stays in "Creating" state longer than this, it will be recreated
+  # Default: 5 minutes
+  # Increase this if your VMs take longer to boot
+  # Example: creation_timeout_minutes: 10
+  creation_timeout_minutes: 5
+
+  # Grace period before checking if runner is registered in GitHub (in minutes)
+  # After VM creation, the service waits this long before requiring the runner
+  # to appear online in GitHub. This allows time for VM boot and runner registration.
+  # Default: 5 minutes
+  # Increase this if your VMs take longer to fully start and register
+  # Example: grace_period_minutes: 7
+  grace_period_minutes: 5
+
 # Hyper-V Configuration
 hyperv:
   # Path to the VM template VHDX file

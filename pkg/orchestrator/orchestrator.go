@@ -107,6 +107,8 @@ func (o *Orchestrator) InitializePool() error {
 // createAndRegisterVM creates a VM and registers it with GitHub
 func (o *Orchestrator) createAndRegisterVM(slot *vmmanager.VMSlot) error {
 	slot.State = vmmanager.StateCreating
+	slot.CreatedAt = time.Now()
+	slot.HealthCheckFailures = 0
 
 	// Generate GitHub runner registration token
 	token, err := o.githubClient.GetRunnerToken()
@@ -123,8 +125,8 @@ func (o *Orchestrator) createAndRegisterVM(slot *vmmanager.VMSlot) error {
 
 	slot.State = vmmanager.StateReady
 
-	// Start monitoring VM state in background
-	go o.MonitorVMState(slot)
+	// Start monitoring VM health in background
+	go o.MonitorVMHealth(slot)
 
 	o.logger.Info("VM ready and waiting for jobs", "vm_name", slot.Name)
 	return nil
