@@ -212,7 +212,7 @@ else {
     }
 }
 
-# Step 6: Install GoReleaser
+# Step 6: Install GoReleaser (optional build tool)
 if (Test-Command "goreleaser") {
     $goreleaserVersion = Get-CommandVersion "goreleaser" "--version"
     Write-Success "GoReleaser is already installed ($goreleaserVersion)"
@@ -239,7 +239,36 @@ else {
     }
 }
 
-# Step 7: Check Hyper-V
+# Step 7: Check NSSM (Non-Sucking Service Manager)
+Write-Step "Step 7: Checking NSSM (Non-Sucking Service Manager)..."
+if (Test-Command "nssm") {
+    $nssmVersion = Get-CommandVersion "nssm" "version"
+    Write-Success "NSSM is already installed ($nssmVersion)"
+}
+else {
+    Write-Info "Installing NSSM..."
+    try {
+        choco install nssm -y
+
+        # Refresh environment variables
+        $env:Path = [System.Environment]::GetEnvironmentVariable("Path", "Machine") + ";" + [System.Environment]::GetEnvironmentVariable("Path", "User")
+
+        if (Test-Command "nssm") {
+            $nssmVersion = Get-CommandVersion "nssm" "version"
+            Write-Success "NSSM installed successfully ($nssmVersion)"
+        }
+        else {
+            Write-Error-Custom "NSSM installation completed but 'nssm' command not found. You may need to restart your terminal."
+        }
+    }
+    catch {
+        Write-Error-Custom "Failed to install NSSM: $_"
+        Write-Info "Continuing with other installations..."
+    }
+}
+
+# Step 8: Check Hyper-V
+Write-Step "Step 8: Checking Hyper-V..."
 try {
     $hypervFeature = Get-WindowsOptionalFeature -FeatureName Microsoft-Hyper-V-All -Online
 
@@ -273,7 +302,7 @@ catch {
     Write-Info "You may need to enable Hyper-V manually for production use"
 }
 
-# Step 8: Create directory structure
+# Step 9: Create directory structure
 $directories = @(
     "vms\templates",
     "vms\storage"
@@ -303,7 +332,7 @@ Write-Info "To use a different location, set these environment variables in .env
 Write-Host "  VM_TEMPLATE_PATH=C:\your\custom\path\runner-template.vhdx" -ForegroundColor Gray
 Write-Host "  VM_STORAGE_PATH=C:\your\custom\storage\path" -ForegroundColor Gray
 
-# Step 9: Setup environment file
+# Step 10: Setup environment file
 if (Test-Path ".env") {
     Write-Success ".env file already exists"
 }

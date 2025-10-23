@@ -78,3 +78,10 @@ tasks:
     cmds:
       - go mod download
       - go mod tidy
+
+  install-service:
+    desc: Build, install to ProgramData, and register as Windows service
+    deps:
+      - build
+    cmds:
+      - powershell.exe -NoProfile -ExecutionPolicy Bypass -File install-service.ps1
