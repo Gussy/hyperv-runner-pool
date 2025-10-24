@@ -46,7 +46,7 @@ func main() {
 			}
 
 			// Setup logger with config
-			log := logger.Setup(cfg.Debug.LogLevel, cfg.Debug.LogFormat, cfg.Debug.LogDirectory)
+			log := logger.Setup(cfg.Logging.Level, cfg.Logging.Format, cfg.Logging.Directory)
 
 			// Print version information
 			log.Info("Starting Hyper-V Runner Pool",

@@ -113,7 +113,8 @@ Copy-Item -Path 'hyperv-runner-pool.exe' -Destination $exePath -Force
 if (Test-Path 'config.yaml') {
     Write-Host 'Copying config.yaml...' -ForegroundColor Yellow
     Copy-Item -Path 'config.yaml' -Destination $configPath -Force
-} else {
+}
+else {
     Write-Host 'WARNING: config.yaml not found in current directory' -ForegroundColor Yellow
     Write-Host "You will need to create it at: $configPath" -ForegroundColor Yellow
     Write-Host 'Use config.example.yaml as a template' -ForegroundColor Yellow
@@ -131,21 +132,11 @@ Write-Host 'Installing Windows service with NSSM...' -ForegroundColor Yellow
 & $nssmPath set $serviceName Start SERVICE_AUTO_START
 & $nssmPath set $serviceName ObjectName LocalSystem
 
-# Set the working directory to the install path (for logs, etc.)
+# Set the working directory to the install path
 & $nssmPath set $serviceName AppDirectory $installPath
 
-# Configure stdout/stderr logging
-$stdoutLog = Join-Path $installPath 'service-stdout.log'
-$stderrLog = Join-Path $installPath 'service-stderr.log'
-& $nssmPath set $serviceName AppStdout $stdoutLog
-& $nssmPath set $serviceName AppStderr $stderrLog
-
-# Rotate logs (10 MB files, keep online)
-& $nssmPath set $serviceName AppStdoutCreationDisposition 4
-& $nssmPath set $serviceName AppStderrCreationDisposition 4
-& $nssmPath set $serviceName AppRotateFiles 1
-& $nssmPath set $serviceName AppRotateOnline 1
-& $nssmPath set $serviceName AppRotateBytes 10485760
+# Note: We don't configure NSSM stdout/stderr logging because the application
+# handles its own logging via the log_directory config option
 
 # Start service
 Write-Host 'Starting service...' -ForegroundColor Yellow
@@ -165,8 +156,10 @@ Write-Host "Service Status:  $($service.Status)" -ForegroundColor Cyan
 Write-Host "Startup Type:    Automatic (starts on boot)" -ForegroundColor Cyan
 Write-Host "Install Path:    $installPath" -ForegroundColor Cyan
 Write-Host "Config Path:     $configPath" -ForegroundColor Cyan
-Write-Host "Service Logs:    $stdoutLog" -ForegroundColor Cyan
-Write-Host "Error Logs:      $stderrLog" -ForegroundColor Cyan
+Write-Host ''
+Write-Host 'IMPORTANT: Configure logging in your config.yaml:' -ForegroundColor Yellow
+Write-Host '  logging:' -ForegroundColor Gray
+Write-Host "    directory: $installPath\logs" -ForegroundColor Gray
 Write-Host ''
 Write-Host 'Useful commands:' -ForegroundColor Yellow
 Write-Host "  Stop service:    nssm stop $serviceName" -ForegroundColor Gray
@@ -174,5 +167,4 @@ Write-Host "  Start service:   nssm start $serviceName" -ForegroundColor Gray
 Write-Host "  Restart service: nssm restart $serviceName" -ForegroundColor Gray
 Write-Host "  Service status:  nssm status $serviceName" -ForegroundColor Gray
 Write-Host "  Remove service:  nssm remove $serviceName confirm" -ForegroundColor Gray
-Write-Host "  View logs:       Get-Content '$stdoutLog' -Tail 50" -ForegroundColor Gray
 Write-Host ''

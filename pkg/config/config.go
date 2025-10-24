@@ -15,6 +15,7 @@ type Config struct {
 	Runners    RunnersConfig    `yaml:"runners"`
 	HyperV     HyperVConfig     `yaml:"hyperv"`
 	Monitoring MonitoringConfig `yaml:"monitoring"`
+	Logging    LoggingConfig    `yaml:"logging"`
 	Debug      DebugConfig      `yaml:"debug"`
 }
 
@@ -61,12 +62,16 @@ type MonitoringConfig struct {
 	GracePeriodMinutes         int `yaml:"grace_period_minutes"`          // Grace period before checking GitHub registration (default: 5)
 }
 
-// DebugConfig holds debugging and logging configuration
+// LoggingConfig holds logging configuration
+type LoggingConfig struct {
+	Level     string `yaml:"level"`     // Log level: debug, info, warn, error (default: info)
+	Format    string `yaml:"format"`    // Log format: text, json (default: text)
+	Directory string `yaml:"directory"` // Directory for log files (default: executable directory)
+}
+
+// DebugConfig holds debugging configuration
 type DebugConfig struct {
-	UseMock      bool   `yaml:"use_mock"`
-	LogLevel     string `yaml:"log_level"`
-	LogFormat    string `yaml:"log_format"`
-	LogDirectory string `yaml:"log_directory"`
+	UseMock bool `yaml:"use_mock"` // Use mock VM manager for development/testing
 }
 
 // LoadFromFile loads configuration from a YAML file
@@ -109,22 +114,22 @@ func LoadFromFile(path string) (*Config, error) {
 	if config.Monitoring.GracePeriodMinutes == 0 {
 		config.Monitoring.GracePeriodMinutes = 5
 	}
-	if config.Debug.LogLevel == "" {
-		config.Debug.LogLevel = "info"
+	if config.Logging.Level == "" {
+		config.Logging.Level = "info"
 	}
-	if config.Debug.LogFormat == "" {
-		config.Debug.LogFormat = "text"
+	if config.Logging.Format == "" {
+		config.Logging.Format = "text"
 	}
-	if config.Debug.LogDirectory == "" {
+	if config.Logging.Directory == "" {
 		// Default to executable directory
 		exePath, err := os.Executable()
 		if err == nil {
-			config.Debug.LogDirectory = filepath.Dir(exePath)
+			config.Logging.Directory = filepath.Dir(exePath)
 		} else {
 			// Fallback to current working directory
 			cwd, err := os.Getwd()
 			if err == nil {
-				config.Debug.LogDirectory = cwd
+				config.Logging.Directory = cwd
 			}
 		}
 	}

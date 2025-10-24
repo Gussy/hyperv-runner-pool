@@ -117,22 +117,24 @@ hyperv:
   # Example: vm_cpu_count: 4
   vm_cpu_count: 2
 
+# Logging Configuration
+logging:
+  # Log level: debug, info, warn, error (default: info)
+  level: info
+
+  # Log format: text, json (default: text)
+  # Use 'json' for structured logging in production
+  format: text
+
+  # Log directory: path where daily log files will be written
+  # Log files are named with the current date: YYYY-MM-DD.log (e.g., 2025-10-23.log)
+  # If not specified, logs are only written to stdout
+  # When running as a service, it's recommended to set this to enable persistent logging
+  # Example: directory: "C:\\ProgramData\\hyperv-runner-pool\\logs"
+  directory: ""
+
 # Debug Configuration
 debug:
   # Use mock VM manager for macOS/Linux development (true/false)
   # Set to true for testing on non-Windows platforms, false for production on Windows
   use_mock: false
-
-  # Log level: debug, info, warn, error
-  log_level: info
-
-  # Log format: text, json
-  # Use 'json' for structured logging in production
-  log_format: text
-
-  # Log directory: path where daily log files will be written
-  # Log files are named with the current date: YYYY-MM-DD.log (e.g., 2025-10-23.log)
-  # If not specified, defaults to the directory where the executable is located
-  # Logs are written to both stdout and the log file
-  # Example: log_directory: "C:\\logs\\hyperv-runner-pool"
-  log_directory: ""
