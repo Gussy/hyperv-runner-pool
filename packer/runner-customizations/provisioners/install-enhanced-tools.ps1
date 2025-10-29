@@ -12,9 +12,15 @@ Write-Host 'This will take 15-30 minutes...'
 choco install -y visualstudio2022buildtools --package-parameters "--add Microsoft.VisualStudio.Workload.VCTools --add Microsoft.VisualStudio.Workload.MSBuildTools --includeRecommended"
 Write-Host 'Visual Studio Build Tools installed' -ForegroundColor Green
 
-# Install Git and version control tools
+# Install Git and version control tools (includes bash)
 Write-Host '=== Installing Git and VCS tools ===' -ForegroundColor Cyan
 choco install -y git
+# Add Git bash and utilities to PATH
+if (Test-Path ("$Env:ProgramFiles\Git")) {
+  $gitPaths = ";$Env:ProgramFiles\Git\cmd;$Env:ProgramFiles\Git\usr\bin;$Env:ProgramFiles\Git\bin"
+  [Environment]::SetEnvironmentVariable("Path",[Environment]::GetEnvironmentVariable("Path", [EnvironmentVariableTarget]::Machine) + $gitPaths,[EnvironmentVariableTarget]::Machine)
+  Write-Host 'Bash and Git utilities added to PATH' -ForegroundColor Green
+}
 choco install -y git-lfs
 choco install -y gh  # GitHub CLI
 Write-Host 'Git tools installed' -ForegroundColor Green
@@ -105,6 +111,7 @@ choco install -y curl
 choco install -y wget
 choco install -y jq
 choco install -y yq
+choco install -y openssl
 choco install -y terraform
 choco install -y packer
 choco install -y cmake
